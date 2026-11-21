@@ -161,3 +161,52 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 - [ ] I can explain every new line in `src/fusionlab/ekf.py`
 - [ ] I answered the questions above without notes
 - [ ] Committed and tagged `m03-bias-wheel`
+## M4 · Fault injection and metrics
+
+**My plan (write before reading faults.py):**
+
+-
+
+**What I learned / differences from the reference:**
+
+-
+
+**Explain it (answer out loud, then write one line each):**
+
+- Why inject faults into recorded data instead of into the simulator's truth?
+- Why is a 20 s GNSS dropout almost harmless (0.5 m), when a 6 s jump costs 13 m?
+- The jump lasts 6 s, but the error is still 7 m 20 s later. Why does the filter recover so slowly?
+  (hint: what is K late in the run, from M2?)
+- Why does the wheel fault hurt the position so much, when the wheel only measures speed?
+  And why is the error still growing at the moment the fault ends?
+- The gyro bias step: the filter does learn the new bias in the end (it reaches ~0.02). Why does it
+  take so long, and what does q_bias have to do with it? (M3)
+- Which fault can the NIS *not* show, and what could detect it instead?
+- After the jump ends, why does the NIS stay above 2 for ~40 s?
+
+**Experiments (predict first, then run):**
+
+- `python -m fusionlab.run --scenario gnss_jump --no-wheel`: does the wheel help or hurt here?
+- Make the jump 4 m instead of 40 m (copy the scenario in Python with `Fault("gnss_jump", 50, 56, 4.0)`
+  and run it with `apply_faults` + `run_filter`). Is the max NIS still far above 2? Is a 4 m jump
+  easy or hard to detect?
+- `EKFConfig(q_bias=1e-4)` on `gyro_bias_step`: does a faster-wandering bias help the filter follow
+  the step? What does it cost on the nominal drive?
+- Run `plot_m4.py --seed 3`: are the numbers similar? Which fault varies most between seeds?
+
+**Experiment results:**
+
+| Experiment | Result | What it shows |
+|---|---|---|
+| `gnss_jump --no-wheel` | 16.0 m during (vs 9.5 m), max 24.8 m; speed error 0.30 m/s (vs 0.012) | the wheel is an independent sensor that limits the damage: without it, the jump corrupts speed too (redundancy) |
+| 4 m jump instead of 40 m | 0.78 m during; max NIS 25.9 (normal fixes reach ~10, M5 gate 13.8) | small faults do little harm and are only just detectable; in-between faults are the hard case |
+| `q_bias=1e-4` on `gyro_bias_step` | 3.51 m during (vs 16.25 m); nominal 0.32 m (vs 0.27 m) | following bias changes faster helps a lot on the fault but costs 18 % normally: no single setting wins both |
+| `plot_m4.py --seed 3` | jump 10.1, drift 7.7, wheel 16.7, gyro 16.1 m (all within ~6 % of seed 1); dropout 0.23 vs 0.53 m | the faults are systematic; only the dropout varies, because its error is random drift |
+
+**Done-checklist**
+
+- [ ] `python -m pytest -q` passes (44 tests), run twice
+- [ ] `python scripts/plot_m4.py` runs and I can explain all six panels
+- [ ] I can explain every line of `src/fusionlab/faults.py` and the new parts of `run.py`
+- [ ] I answered the questions above without notes
+- [ ] Committed and tagged `m04-faults`

@@ -8,7 +8,8 @@ module at a time; each module ends in tests that pass.
 | M1 · Simulator | done |
 | M2 · EKF: predict and GNSS update | done |
 | M3 · Wheel speed and gyro bias | done |
-| M4 · Fault injection and metrics | next |
+| M4 · Fault injection and metrics | done |
+| M5 · NIS gating and the fault monitor | next |
 
 ## M1 · Simulator
 
@@ -84,3 +85,29 @@ python scripts/plot_m3.py
 ```
 
 ![M3](docs/m3_bias_wheel.png)
+
+## M4 · Fault injection
+
+`src/fusionlab/faults.py` injects five real sensor failures into the recorded data, with known
+start, end and size, while the truth stays untouched. The filter is not told: finding them is
+its job from M5 on. `run.py` now also measures the error during and after each fault.
+
+| Fault (scenario) | What it models | RMSE during, mean of 10 seeds |
+|---|---|---|
+| `gnss_dropout` 40–60 s | tunnel: no fixes | 0.67 m |
+| `gnss_jump` 50–56 s, 40 m | multipath near buildings | 9.67 m |
+| `gnss_drift` 40–80 s, 1 m/s | receiver error growing slowly | 7.62 m |
+| `wheel_scale` 50–70 s, +15 % | wheel slip, wrong tyre radius | 16.54 m |
+| `gyro_bias_step` 50–120 s, 0.02 rad/s | IMU bias jump (temperature, shock) | 16.13 m |
+
+Nominal is about 0.3 m. With no fault handling, every fault except the dropout costs 7–17 m,
+and the damage lasts well after the fault ends (7.5 m still, 20 s after a 6 s jump). During
+each of those four, the NIS jumps from its normal ~2 to 340–730: that is the detector M5 uses.
+
+```bash
+python -m pytest -q
+python -m fusionlab.run --scenario gnss_jump
+python scripts/plot_m4.py
+```
+
+![M4](docs/m4_faults.png)
