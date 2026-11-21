@@ -7,7 +7,8 @@ module at a time; each module ends in tests that pass.
 |---|---|
 | M1 · Simulator | done |
 | M2 · EKF: predict and GNSS update | done |
-| M3 · Wheel speed and gyro bias | next |
+| M3 · Wheel speed and gyro bias | done |
+| M4 · Fault injection and metrics | next |
 
 ## M1 · Simulator
 
@@ -56,3 +57,30 @@ python scripts/plot_m2.py
 ```
 
 ![M2](docs/m2_ekf.png)
+
+## M3 · Gyro bias and wheel speed
+
+The filter now has 5 states, [x, y, heading, speed, gyro bias], and a second sensor: wheel
+speed at 50 Hz. It subtracts its own bias estimate from every gyro reading.
+
+| Case (seed 1, true bias 0.004 rad/s) | Position RMSE | Speed RMSE | Bias learned | Mean NIS (GNSS / wheel) |
+|---|---|---|---|---|
+| M2: no bias state, no wheel | 7.28 m | 0.081 m/s | – | 25.1 / – |
+| wheel only | 7.34 m | 0.010 m/s | – | 25.6 / 0.97 |
+| bias state only | 0.32 m | 0.066 m/s | 0.0040 | 1.96 / – |
+| **M3: bias state + wheel** | **0.27 m** | **0.009 m/s** | **0.0040** | **1.96 / 0.97** |
+
+The bias state fixes the position (27× better) and makes the filter honest again (NIS ≈ its
+degrees of freedom: 2 for GNSS, 1 for the wheel). The wheel sensor makes speed 7× better. The
+bias is learned to within 10 % in 21–27 s, whatever its size or sign.
+
+```bash
+python -m pytest -q
+python -m fusionlab.run                       # M3
+python -m fusionlab.run --no-bias-state       # without the bias state
+python -m fusionlab.run --no-wheel            # without the wheel sensor
+python -m fusionlab.run --bias 0.01           # a bigger bias
+python scripts/plot_m3.py
+```
+
+![M3](docs/m3_bias_wheel.png)

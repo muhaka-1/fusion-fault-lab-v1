@@ -1,7 +1,9 @@
-"""M2 acceptance tests: the 4-state EKF (IMU predict + GNSS update)."""
+"""M2 acceptance tests, kept for M3: IMU predict + GNSS update.
+
+The tests about the missing bias state now freeze it (NO_BIAS_STATE) to reproduce M2."""
 import numpy as np
 from fusionlab.ekf import EKF, EKFConfig, wrap
-from fusionlab.run import run_filter, metrics
+from fusionlab.run import run_filter, metrics, NO_BIAS_STATE
 from fusionlab.sim import SimConfig, simulate
 
 
@@ -16,7 +18,7 @@ def test_predict_drives_along_the_heading():
     ekf = EKF([0.0, 0.0, np.pi / 2, 10.0])          # heading north at 10 m/s
     for _ in range(100):                            # 1 s
         ekf.predict(gyro=0.0, acc=0.0, dt=0.01)
-    assert np.allclose(ekf.x, [0.0, 10.0, np.pi / 2, 10.0], atol=1e-9)
+    assert np.allclose(ekf.x[:4], [0.0, 10.0, np.pi / 2, 10.0], atol=1e-9)
 
 
 def test_predict_turns_and_accelerates():
@@ -67,12 +69,12 @@ def test_with_a_correct_model_the_filter_beats_gnss_and_is_consistent():
 
 def test_unmodelled_gyro_bias_makes_the_filter_overconfident():
     """The known flaw that M3 fixes: the filter trusts a biased gyro."""
-    m = metrics(run_filter(simulate(SimConfig())))  # default bias 0.004 rad/s
+    m = metrics(run_filter(simulate(SimConfig()), EKFConfig(**NO_BIAS_STATE), use_wheel=False))  # = M2
     assert m["rmse_m"] > 3.0                        # worse than raw GNSS
     assert m["mean_nis"] > 10                       # innovations far bigger than the filter expects
     assert m["within_2sigma"] < 0.5
 
 
 def test_inflating_gyro_noise_hides_the_bias_at_a_price():
-    m = metrics(run_filter(simulate(SimConfig()), EKFConfig(sigma_gyro=0.1)))
+    m = metrics(run_filter(simulate(SimConfig()), EKFConfig(sigma_gyro=0.1, **NO_BIAS_STATE), use_wheel=False))
     assert m["rmse_m"] < 1.0                        # rescued, but the filter now distrusts a good gyro

@@ -91,3 +91,42 @@
 - [x] I can explain every line of `src/fusionlab/ekf.py`
 - [x] I answered the questions above without notes
 - [x] Committed and tagged `m02-ekf-gnss`
+
+## M3 · Gyro bias and wheel speed
+
+**My plan (write before reading the new parts of ekf.py):**
+
+-
+
+**What I learned / differences from the reference:**
+
+-
+
+**Explain it (answer out loud, then write one line each):**
+
+- Nothing measures the bias directly. How does the filter learn it? (look at F[2, 4] and at what
+  GNSS fixes say about heading)
+- Why does it take 20–30 s to learn, and why is that time the same for a bias of 0.004 and 0.01?
+- Why is the bias modelled as a slow random walk (q_bias) instead of a fixed constant?
+- What would happen if the car only drove straight at constant speed? (hint: observability)
+- The wheel measures speed only. Why does it still improve the position a little (0.32 -> 0.27 m)?
+- Why does the wheel NIS average 1 while the GNSS NIS averages 2?
+- Why does `update_wheel` move only the speed at the start, but later also nudge x, y and heading?
+
+**Experiments (predict first, then run):**
+
+- `python -m fusionlab.run --bias -0.006`: does a negative bias work as well?
+- `EKFConfig(p0_bias=0.001)`: the filter is told the bias is almost certainly tiny. How long does it
+  take to learn 0.004 now? Look at the bias panel of a plot or print `r.est[::500, 4]`.
+- `EKFConfig(q_bias=1e-3)`: the bias may wander 100x faster. What happens to the bias estimate and
+  the heading? Is the filter still consistent?
+- `python -m fusionlab.run --no-wheel --seed 4` vs with the wheel: how much does the wheel help on
+  a different drive?
+
+**Done-checklist**
+
+- [ ] `python -m pytest -q` passes (26 tests), run twice
+- [ ] `python scripts/plot_m3.py` runs and I can explain all four panels
+- [ ] I can explain every new line in `src/fusionlab/ekf.py`
+- [ ] I answered the questions above without notes
+- [ ] Committed and tagged `m03-bias-wheel`

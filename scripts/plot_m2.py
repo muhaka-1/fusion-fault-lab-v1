@@ -1,5 +1,8 @@
 """M2 check by eye: when the filter works, when it fails, and why.
 
+Since M3 the filter has a bias state and a wheel sensor; this script turns both off
+(NO_BIAS_STATE, use_wheel=False) so it still shows the M2 filter.
+
     python scripts/plot_m2.py            # writes docs/m2_ekf.png
 """
 import argparse, pathlib
@@ -8,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from fusionlab.ekf import EKFConfig, wrap
-from fusionlab.run import run_filter, metrics
+from fusionlab.run import run_filter, metrics, NO_BIAS_STATE
 from fusionlab.sim import SimConfig, simulate
 
 ap = argparse.ArgumentParser()
@@ -16,12 +19,12 @@ ap.add_argument("--seed", type=int, default=1)
 a = ap.parse_args()
 
 cases = {
-    "no bias (model right)": (SimConfig(seed=a.seed, gyro_bias=0.0), EKFConfig()),
-    "bias 0.004, honest gyro noise": (SimConfig(seed=a.seed), EKFConfig()),
-    "bias 0.004, gyro noise inflated to 0.1": (SimConfig(seed=a.seed), EKFConfig(sigma_gyro=0.1)),
+    "no bias (model right)": (SimConfig(seed=a.seed, gyro_bias=0.0), EKFConfig(**NO_BIAS_STATE)),
+    "bias 0.004, honest gyro noise": (SimConfig(seed=a.seed), EKFConfig(**NO_BIAS_STATE)),
+    "bias 0.004, gyro noise inflated to 0.1": (SimConfig(seed=a.seed), EKFConfig(sigma_gyro=0.1, **NO_BIAS_STATE)),
 }
 runs = {k: (simulate(s), e) for k, (s, e) in cases.items()}
-res = {k: run_filter(d, e) for k, (d, e) in runs.items()}
+res = {k: run_filter(d, e, use_wheel=False) for k, (d, e) in runs.items()}
 
 fig, ax = plt.subplots(2, 2, figsize=(13, 8.5))
 # 1. path zoom: 10 s of the biased, honest case
