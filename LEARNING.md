@@ -35,3 +35,75 @@
 - [ ] I can explain every line of `src/fusionlab/sim.py`
 - [ ] I answered the questions above without notes
 - [ ] Committed and tagged `m01-simulator`
+
+## M2 · EKF: predict and GNSS update
+
+**My plan (write before reading ekf.py):**
+
+-
+
+**What I learned / differences from the reference:**
+
+-
+
+**Explain it (answer out loud, then write one line each):**
+
+- What is in the state, and why is heading in it but not acceleration?
+- What does the Jacobian F linearise, and which entries change with heading and speed?
+- What do P, S and K mean in words? Why does K get smaller as the run goes on?
+- Why the Joseph form instead of the shorter (I − KH)P?
+- What is the NIS, and why should it average 2 for a GNSS fix?
+- With the bias, why is the filter *worse* than raw GNSS, and why does its NIS jump to ~25?
+- Inflating the gyro noise to 0.1 fixes the RMSE. What does that cost? (hint: what will the
+  filter do when GNSS itself goes wrong in M5?)
+
+**Experiments (predict first, then run):**
+
+- `python -m fusionlab.run --bias 0.01`: RMSE and NIS? Why?
+- `EKFConfig(sigma_gnss=0.5)` on the default drive: does telling the filter GNSS is better than it
+  really is help or hurt? Look at `within_2sigma`.
+- Comment out `self.P = 0.5 * (self.P + self.P.T)` in both places: does anything change? Why keep it?
+
+**Done-checklist**
+
+- [ ] `python -m pytest -q` passes (14 tests), run twice
+- [ ] `python scripts/plot_m2.py` runs and I can explain all four panels
+- [ ] I can explain every line of `src/fusionlab/ekf.py`
+- [ ] I answered the questions above without notes
+- [ ] Committed and tagged `m02-ekf-gnss`
+
+## M2 · EKF: predict and GNSS update
+
+**My plan (write before reading ekf.py):**
+
+-
+
+**What I learned / differences from the reference:**
+
+-
+
+**Explain it (answer out loud, then write one line each):**
+
+- What is in the state, and why is heading in it but not acceleration?
+- What does the Jacobian F linearise, and which entries change with heading and speed?
+- What do P, S and K mean in words? Why does K get smaller as the run goes on?
+- Why the Joseph form instead of the shorter (I − KH)P?
+- What is the NIS, and why should it average 2 for a GNSS fix?
+- With the bias, why is the filter *worse* than raw GNSS, and why does its NIS jump to ~25?
+- Inflating the gyro noise to 0.1 fixes the RMSE. What does that cost? (hint: what will the
+  filter do when GNSS itself goes wrong in M5?)
+
+**Experiments (predict first, then run):**
+
+- `python -m fusionlab.run --bias 0.01`: RMSE and NIS? Why?
+- `EKFConfig(sigma_gnss=0.5)` on the default drive: does telling the filter GNSS is better than it
+  really is help or hurt? Look at `within_2sigma`.
+- Comment out `self.P = 0.5 * (self.P + self.P.T)` in both places: does anything change? Why keep it?
+
+**Done-checklist**
+
+- [ ] `python -m pytest -q` passes (14 tests), run twice
+- [ ] `python scripts/plot_m2.py` runs and I can explain all four panels
+- [ ] I can explain every line of `src/fusionlab/ekf.py`
+- [ ] I answered the questions above without notes
+- [ ] Committed and tagged `m02-ekf-gnss`
