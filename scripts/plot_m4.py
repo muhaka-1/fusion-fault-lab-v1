@@ -1,5 +1,7 @@
 """M4 check by eye: what each fault does to the filter when nothing protects it.
 
+Runs with gating=False (added in M5) so it still shows the unprotected filter.
+
     python scripts/plot_m4.py            # writes docs/m4_faults.png and prints a table
 """
 import argparse, pathlib
@@ -13,9 +15,9 @@ from fusionlab.run import run_scenario, metrics
 ap = argparse.ArgumentParser()
 ap.add_argument("--seed", type=int, default=1)
 a = ap.parse_args()
-nominal = run_scenario("nominal", a.seed)
+nominal = run_scenario("nominal", a.seed, gating=False)
 names = [n for n in SCENARIOS if n != "nominal"]
-res = {n: run_scenario(n, a.seed) for n in names}
+res = {n: run_scenario(n, a.seed, gating=False) for n in names}
 
 fig, ax = plt.subplots(2, 3, figsize=(15, 8.5))
 for k, n in enumerate(names):

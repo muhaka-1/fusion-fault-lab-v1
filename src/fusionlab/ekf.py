@@ -1,20 +1,22 @@
-"""M3: Extended Kalman Filter, state = [x, y, psi, v, b_g].
+"""M5: Extended Kalman Filter with NIS gating, state = [x, y, psi, v, b_g].
 
 Prediction (100 Hz): the IMU is the control input; the gyro bias b_g is subtracted.
     x   += v cos(psi) dt        y += v sin(psi) dt
     psi += (gyro - b_g) dt      v += acc dt        b_g stays (slow random walk)
 Updates: GNSS position (5 Hz) and wheel speed (50 Hz).
 
-New in M3 compared with M2:
-    * the 5th state b_g, so the filter learns the gyro's bias instead of trusting it
-    * update_wheel(), a 1-D measurement of speed
-Not here yet: gating (rejecting measurements that don't fit) -> M5.
+New in M3: the 5th state b_g and update_wheel().
+New in M5: gating. Before using a measurement, the filter checks its NIS against a chi-square
+threshold; a measurement that is too surprising is rejected instead of corrupting the state.
+Both updates now return (accepted, nis, dof).
+Not here yet: lock-out recovery for when the filter itself is the one that is wrong -> M6.
 
 Setting p0_bias = 0 and q_bias = 0 freezes b_g at 0, which gives exactly the M2 filter.
 """
 from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
+from .stats import chi2_threshold
 
 N = 5  # number of states
 
@@ -30,6 +32,7 @@ class EKFConfig:
     p0_psi: float = 0.2
     p0_v: float = 1.0
     p0_bias: float = 0.02       # rad/s: "the bias is probably within +-0.02"
+    gate_prob: float = 0.999    # NEW: accept a measurement if its NIS is below the 99.9 % chi-square value
 
 
 def wrap(a: float) -> float:
@@ -38,8 +41,9 @@ def wrap(a: float) -> float:
 
 
 class EKF:
-    def __init__(self, x0, cfg: EKFConfig | None = None):
+    def __init__(self, x0, cfg: EKFConfig | None = None, gating: bool = True):
         self.cfg = cfg or EKFConfig()
+        self.gating = gating
         c = self.cfg
         self.x = np.array([x0[0], x0[1], x0[2], x0[3], 0.0], dtype=float)   # bias starts at 0: unknown
         self.P = np.diag([c.p0_pos**2, c.p0_pos**2, c.p0_psi**2, c.p0_v**2, c.p0_bias**2])
@@ -68,26 +72,32 @@ class EKF:
         self.P = F @ self.P @ F.T + G @ Q @ G.T
         self.P = 0.5 * (self.P + self.P.T)
 
-    def _update(self, z, H, R) -> float:
-        """Generic Kalman update for a linear measurement z = H x + noise. Returns the NIS."""
+    def _update(self, z, H, R):
+        """Gated Kalman update for a linear measurement z = H x + noise.
+        Returns (accepted, nis, dof). A rejected measurement leaves x and P untouched."""
         y = z - H @ self.x
         S = H @ self.P @ H.T + R
+        nis = float(y @ np.linalg.solve(S, y))
+        dof = len(z)
+        accepted = (not self.gating) or nis <= chi2_threshold(self.cfg.gate_prob, dof)
+        if not accepted:
+            return False, nis, dof
         K = self.P @ H.T @ np.linalg.inv(S)
         self.x = self.x + K @ y
         self.x[2] = wrap(self.x[2])
         I = np.eye(N)
         self.P = (I - K @ H) @ self.P @ (I - K @ H).T + K @ R @ K.T   # Joseph form
         self.P = 0.5 * (self.P + self.P.T)
-        return float(y @ np.linalg.solve(S, y))
+        return True, nis, dof
 
-    def update_gnss(self, z) -> float:
-        """GNSS position fix (2-D). Returns the NIS (expected average: 2)."""
+    def update_gnss(self, z):
+        """GNSS position fix (2-D). Returns (accepted, nis, dof); NIS averages 2 when all is well."""
         H = np.zeros((2, N)); H[0, 0] = 1.0; H[1, 1] = 1.0
         R = np.eye(2) * self.cfg.sigma_gnss**2
         return self._update(np.asarray(z, dtype=float), H, R)
 
-    def update_wheel(self, z: float) -> float:
-        """Wheel-speed measurement (1-D). Returns the NIS (expected average: 1)."""
+    def update_wheel(self, z: float):
+        """Wheel-speed measurement (1-D). Returns (accepted, nis, dof); NIS averages 1."""
         H = np.zeros((1, N)); H[0, 3] = 1.0
         R = np.array([[self.cfg.sigma_wheel**2]])
         return self._update(np.array([z], dtype=float), H, R)

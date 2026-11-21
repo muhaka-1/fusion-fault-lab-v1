@@ -1,5 +1,7 @@
 """M3 check by eye: what the bias state and the wheel sensor each add.
 
+Runs with gating=False (added in M5) so it still shows the M3 filter.
+
     python scripts/plot_m3.py            # writes docs/m3_bias_wheel.png
 """
 import argparse, pathlib
@@ -16,10 +18,10 @@ ap.add_argument("--seed", type=int, default=1)
 a = ap.parse_args()
 d = simulate(SimConfig(seed=a.seed))
 cases = {
-    "M2: no bias state, no wheel": run_filter(d, EKFConfig(**NO_BIAS_STATE), use_wheel=False),
-    "wheel only": run_filter(d, EKFConfig(**NO_BIAS_STATE), use_wheel=True),
-    "bias state only": run_filter(d, EKFConfig(), use_wheel=False),
-    "M3: bias state + wheel": run_filter(d, EKFConfig(), use_wheel=True),
+    "M2: no bias state, no wheel": run_filter(d, EKFConfig(**NO_BIAS_STATE), use_wheel=False, gating=False),
+    "wheel only": run_filter(d, EKFConfig(**NO_BIAS_STATE), use_wheel=True, gating=False),
+    "bias state only": run_filter(d, EKFConfig(), use_wheel=False, gating=False),
+    "M3: bias state + wheel": run_filter(d, EKFConfig(), use_wheel=True, gating=False),
 }
 full = cases["M3: bias state + wheel"]
 

@@ -9,7 +9,8 @@ module at a time; each module ends in tests that pass.
 | M2 · EKF: predict and GNSS update | done |
 | M3 · Wheel speed and gyro bias | done |
 | M4 · Fault injection and metrics | done |
-| M5 · NIS gating and the fault monitor | next |
+| M5 · NIS gating and the fault monitor | done |
+| M6 · Lock-out recovery and the benchmark | next |
 
 ## M1 · Simulator
 
@@ -111,3 +112,36 @@ python scripts/plot_m4.py
 ```
 
 ![M4](docs/m4_faults.png)
+
+## M5 · NIS gating and the fault monitor
+
+Every measurement is now checked before it is used: if its NIS is above the 99.9 % chi-square
+value (13.8 for a GNSS fix, 10.8 for wheel speed), it is rejected and the state is left alone.
+`src/fusionlab/monitor.py` adds a windowed test (the sum of the last 10 NIS values, for slow
+faults that stay under the single-sample gate) and a status: NOMINAL, DEGRADED (no accepted fix
+for 1 s, or an alarm) or UNAVAILABLE (the filter's own position σ above 5 m).
+
+| Scenario, mean of 10 seeds | RMSE gating off | RMSE gating on | Detected after |
+|---|---|---|---|
+| nominal | 0.40 m | 0.41 m | – (0.1 % false rejections) |
+| `gnss_dropout` | 0.52 m | 0.52 m | 0.81 s (status DEGRADED) |
+| `gnss_jump` | 4.16 m | **0.41 m** | 0.0 s |
+| `gnss_drift` | 7.27 m | **1.49 m** | 3.5 s |
+| `wheel_scale` | 11.86 m | **0.41 m** | 0.0 s |
+| `gyro_bias_step` | 12.33 m | **160.3 m** | 5.2 s |
+
+Gating fixes the step faults completely and limits the drift. It makes the gyro bias step far
+worse: once the filter's own heading is wrong, every honest GNSS fix looks like a fault, so it
+rejects them all and dead-reckons hundreds of metres away, still reporting only DEGRADED.
+That is what M6 fixes.
+
+```bash
+pip install -e ".[dev]"                     # scipy is new in M5
+python -m pytest -q
+python -m fusionlab.run --scenario gnss_jump
+python -m fusionlab.run --scenario gnss_jump --no-gating
+python -m fusionlab.run --scenario gyro_bias_step
+python scripts/plot_m5.py
+```
+
+![M5](docs/m5_gating.png)

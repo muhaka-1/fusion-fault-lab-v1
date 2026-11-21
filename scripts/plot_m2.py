@@ -24,7 +24,7 @@ cases = {
     "bias 0.004, gyro noise inflated to 0.1": (SimConfig(seed=a.seed), EKFConfig(sigma_gyro=0.1, **NO_BIAS_STATE)),
 }
 runs = {k: (simulate(s), e) for k, (s, e) in cases.items()}
-res = {k: run_filter(d, e, use_wheel=False) for k, (d, e) in runs.items()}
+res = {k: run_filter(d, e, use_wheel=False, gating=False) for k, (d, e) in runs.items()}
 
 fig, ax = plt.subplots(2, 2, figsize=(13, 8.5))
 # 1. path zoom: 10 s of the biased, honest case

@@ -1,4 +1,6 @@
-"""M4 acceptance tests: fault injection and what each fault does to an unprotected filter."""
+"""M4 acceptance tests: fault injection and what each fault does to an unprotected filter.
+
+Since M5 the filter gates by default; the "what the faults do" tests use gating=False."""
 import numpy as np
 import pytest
 from fusionlab.faults import SCENARIOS, Fault, apply_faults
@@ -70,22 +72,22 @@ def test_run_scenario_nominal_is_the_plain_filter():
 
 # ---- what the faults do (no fault handling yet) ----------------------------------------
 def test_a_short_dropout_is_harmless_for_a_good_filter():
-    m = metrics(run_scenario("gnss_dropout", 1))
+    m = metrics(run_scenario("gnss_dropout", 1, gating=False))
     assert m["max_during_gnss_dropout_m"] < 2.0               # 20 s on IMU + wheel + learned bias
 
 
 @pytest.mark.parametrize("name", ["gnss_jump", "gnss_drift", "wheel_scale", "gyro_bias_step"])
 def test_measurement_faults_hurt_an_unprotected_filter(name):
-    m = metrics(run_scenario(name, 1))
+    m = metrics(run_scenario(name, 1, gating=False))
     assert m[f"rmse_during_{name}_m"] > 5.0                   # nominal is ~0.3 m
 
 
 @pytest.mark.parametrize("name", ["gnss_jump", "gnss_drift", "wheel_scale", "gyro_bias_step"])
 def test_the_nis_shows_every_measurement_fault(name):
-    m = metrics(run_scenario(name, 1))
+    m = metrics(run_scenario(name, 1, gating=False))
     assert m[f"max_nis_during_{name}"] > 100                  # nominal NIS averages 2: this is the M5 detector
 
 
 def test_the_damage_outlasts_the_fault():
-    m = metrics(run_scenario("gnss_jump", 1))
+    m = metrics(run_scenario("gnss_jump", 1, gating=False))
     assert m["rmse_after_gnss_jump_m"] > 3.0                  # still metres off 20 s after the jump ended

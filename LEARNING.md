@@ -226,3 +226,51 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 - [ ] I can explain every line of `src/fusionlab/faults.py` and the new parts of `run.py`
 - [ ] I answered the questions above without notes
 - [ ] Committed and tagged `m04-faults`
+
+## M5 · NIS gating and the fault monitor
+
+**My plan (write before reading the new code):**
+
+-
+
+**What I learned / differences from the reference:**
+
+-
+
+**Explain it (answer out loud, then write one line each):**
+
+- Why is the GNSS gate 13.8 and the wheel gate 10.8, both at 99.9 %?
+- At 99.9 %, how many good GNSS fixes per hour does the gate reject by mistake? Is that a problem?
+- Why does a rejected measurement leave both x and P untouched?
+- The drift is caught after 3.5 s, the jump after 0.0 s. Why? What does the windowed test add?
+- Why is the dropout detected by the status (a timeout), not by the gate?
+- The jump: with gating on the filter is fine immediately after the fault. Compare with M4, where
+  it was still 7 m off 20 s later. Why the difference?
+- The gyro bias step: why does gating make it 13x *worse*? Why does the status stay DEGRADED instead
+  of UNAVAILABLE while the filter is 450 m off?
+- Gating with alarm off vs on: in `--no-gating` runs the detection delays are still reported. Why?
+
+**Experiments (predict first, then run):**
+
+- `EKFConfig(gate_prob=0.99)` on nominal and on `gnss_drift`: false rejections vs drift error?
+- `EKFConfig(gate_prob=0.99999)` on `gnss_jump`: is the 40 m jump still rejected? And a 4 m jump?
+- `MonitorConfig(window=30)` on `gnss_drift`: is the drift detected sooner or later? Why?
+- `python -m fusionlab.run --scenario gyro_bias_step` and look at the status changes line: when does
+  it go DEGRADED, and does it ever come back?
+
+**Experiment results:**
+
+| Experiment | Result | What it shows |
+|---|---|---|
+| gate 99 % (9.2) vs 99.9 % (13.8) | false rejections 1.3 % vs 0.3 %; drift error during 1.79 vs 2.50 m; detection 3.6 s both | stricter gate catches the drift better but rejects 4x more good fixes: missed faults vs false alarms |
+| gate 99.999 % (23.0), 40 m jump | still all rejected, 0.07 m | a big fault (NIS ~700) is far above any sensible gate |
+| gate 99.999 %, 4 m jump | 2/31 rejected, 0.70 m (default gate: 6/31, 0.61 m; no gating: 0.78 m) | a small fault sits at the gate's edge: partly rejected, the hard in-between case |
+| window 30 vs 10 on drift | detection 3.6 s both (first rejection 43.6 s); alarm 44.6 vs 43.6 s | here the gate found the drift first; a longer window is smoother but slower |
+
+**Done-checklist**
+
+- [ ] `pip install -e ".[dev]"` done (scipy), `python -m pytest -q` passes (57 tests), run twice
+- [ ] `python scripts/plot_m5.py` runs and I can explain all six panels and the status strips
+- [ ] I can explain every line of `stats.py`, `monitor.py` and the gating in `ekf.py`
+- [ ] I answered the questions above without notes
+- [ ] Committed and tagged `m05-gating-monitor`

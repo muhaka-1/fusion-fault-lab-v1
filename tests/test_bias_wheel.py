@@ -25,7 +25,8 @@ def test_bias_uncertainty_couples_into_heading():
 def test_wheel_update_corrects_speed_only():
     ekf = EKF([5.0, 6.0, 0.3, 10.0])
     v_std = np.sqrt(ekf.P[3, 3])
-    nis = ekf.update_wheel(10.5)
+    ok, nis, dof = ekf.update_wheel(10.5)
+    assert ok and dof == 1
     assert 10.4 < ekf.x[3] < 10.5                   # nearly all the way: the wheel is precise (0.1 vs 1.0)
     assert np.allclose(ekf.x[[0, 1, 2]], [5.0, 6.0, 0.3])   # P0 is diagonal: nothing else moves yet
     assert np.sqrt(ekf.P[3, 3]) < 0.15 * v_std
@@ -66,5 +67,5 @@ def test_wheel_speed_makes_the_speed_estimate_much_better():
 
 
 def test_wheel_alone_does_not_fix_the_bias():
-    m = metrics(run_filter(simulate(SimConfig()), EKFConfig(**NO_BIAS_STATE)))
+    m = metrics(run_filter(simulate(SimConfig()), EKFConfig(**NO_BIAS_STATE), gating=False))
     assert m["rmse_m"] > 3.0                        # only the bias state does that

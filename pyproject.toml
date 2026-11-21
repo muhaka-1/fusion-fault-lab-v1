@@ -3,7 +3,7 @@ name = "fusionlab"
 version = "0.1.0"
 description = "Sensor fusion with fault detection, built module by module (M1: simulator)"
 requires-python = ">=3.10"
-dependencies = ["numpy", "matplotlib"]
+dependencies = ["numpy", "scipy", "matplotlib"]
 
 [project.optional-dependencies]
 dev = ["pytest"]

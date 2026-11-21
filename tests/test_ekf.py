@@ -41,7 +41,8 @@ def test_predict_grows_uncertainty_and_keeps_it_symmetric():
 def test_gnss_update_pulls_towards_the_fix_and_shrinks_uncertainty():
     ekf = EKF([0.0, 0.0, 0.0, 10.0])               # P0 says +-5 m
     before = ekf.pos_std()
-    nis = ekf.update_gnss([3.0, -4.0])
+    ok, nis, dof = ekf.update_gnss([3.0, -4.0])
+    assert ok and dof == 2
     assert 2.0 < ekf.x[0] < 3.0 and -4.0 < ekf.x[1] < -3.0   # moved most of the way: the fix is more precise
     assert ekf.pos_std() < 0.5 * before
     assert nis > 0
@@ -69,12 +70,12 @@ def test_with_a_correct_model_the_filter_beats_gnss_and_is_consistent():
 
 def test_unmodelled_gyro_bias_makes_the_filter_overconfident():
     """The known flaw that M3 fixes: the filter trusts a biased gyro."""
-    m = metrics(run_filter(simulate(SimConfig()), EKFConfig(**NO_BIAS_STATE), use_wheel=False))  # = M2
+    m = metrics(run_filter(simulate(SimConfig()), EKFConfig(**NO_BIAS_STATE), use_wheel=False, gating=False))  # = M2
     assert m["rmse_m"] > 3.0                        # worse than raw GNSS
     assert m["mean_nis"] > 10                       # innovations far bigger than the filter expects
     assert m["within_2sigma"] < 0.5
 
 
 def test_inflating_gyro_noise_hides_the_bias_at_a_price():
-    m = metrics(run_filter(simulate(SimConfig()), EKFConfig(sigma_gyro=0.1, **NO_BIAS_STATE), use_wheel=False))
+    m = metrics(run_filter(simulate(SimConfig()), EKFConfig(sigma_gyro=0.1, **NO_BIAS_STATE), use_wheel=False, gating=False))
     assert m["rmse_m"] < 1.0                        # rescued, but the filter now distrusts a good gyro
