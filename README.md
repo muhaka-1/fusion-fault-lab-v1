@@ -10,7 +10,8 @@ module at a time; each module ends in tests that pass.
 | M3 · Wheel speed and gyro bias | done |
 | M4 · Fault injection and metrics | done |
 | M5 · NIS gating and the fault monitor | done |
-| M6 · Lock-out recovery and the benchmark | next |
+| M6 · Lock-out recovery and the benchmark | done |
+| Phase 2 (M7–M10): C foundations | next |
 
 ## M1 · Simulator
 
@@ -145,3 +146,41 @@ python scripts/plot_m5.py
 ```
 
 ![M5](docs/m5_gating.png)
+
+## M6 · Lock-out recovery and the benchmark
+
+In M5 a gyro-bias step locked the filter out: its own heading went wrong, every honest GNSS fix
+looked like a fault, and it drifted 450 m away. Now, after 50 GNSS rejections in a row (10 s),
+the filter assumes it is the one that is wrong and inflates its position, heading and bias
+uncertainty 25× so the gate opens again (`lockout_rejects`, `lockout_inflate` in `EKFConfig`).
+
+`python -m fusionlab.benchmark` runs every scenario in three modes over 10 seeds and writes
+`docs/results.md`:
+
+| Scenario (RMSE during fault, mean of 10 seeds) | No fault handling | Gating | Gating + recovery |
+|---|---|---|---|
+| `gnss_jump` | 9.67 m | 0.28 m | 0.28 m |
+| `wheel_scale` | 16.54 m | 0.32 m | 0.32 m |
+| `gnss_dropout` | 0.67 m | 0.67 m | 0.67 m |
+| `gyro_bias_step` | 16.13 m | 209.85 m | **7.77 m** |
+| `gnss_drift` | 7.62 m | **2.42 m** | 17.57 m |
+
+Recovery rescues the gyro case and lets the filter learn the new bias exactly (0.0241 vs 0.024),
+but it makes the slow drift 7× worse: after 10 s of rejections it re-opens the gate to a GNSS that
+really is drifting, follows it, and reports NOMINAL while 29 m off. Changing the lock-out length
+only moves the problem (2 s: gyro 1.8 m, drift 20 m; 30 s: gyro 194 m, drift 2.0 m). From GNSS
+innovations alone the filter cannot tell "my heading is wrong" from "GNSS is slowly lying": that
+needs a better detector, the first item on the roadmap.
+
+```bash
+python -m pytest -q
+python -m fusionlab.run --scenario gyro_bias_step
+python -m fusionlab.run --scenario gyro_bias_step --no-recovery
+python -m fusionlab.run --scenario gnss_drift
+python scripts/plot_m6.py
+python -m fusionlab.benchmark            # ~2–4 min, writes docs/results.md
+```
+
+![M6](docs/m6_recovery.png)
+
+Phase 1 (the Python estimation core) is complete. Next: the C target.

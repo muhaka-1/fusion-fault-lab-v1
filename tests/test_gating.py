@@ -1,10 +1,14 @@
-"""M5 acceptance tests: NIS gating and the fault monitor."""
+"""M5 acceptance tests: NIS gating and the fault monitor.
+
+Since M6 the filter also has lock-out recovery; the tests about gating alone turn it off (NO_RECOVERY)."""
 import numpy as np
 import pytest
-from fusionlab.ekf import EKF
+from fusionlab.ekf import EKF, EKFConfig
 from fusionlab.monitor import Monitor, MonitorConfig, NOMINAL, DEGRADED, UNAVAILABLE
 from fusionlab.run import run_scenario, metrics
 from fusionlab.stats import chi2_threshold
+
+NO_RECOVERY = EKFConfig(lockout_rejects=0)
 
 
 # ---- building blocks -----------------------------------------------------------------
@@ -96,7 +100,7 @@ def test_wheel_speed_scale_fault_is_detected_and_contained():
 
 
 def test_slow_drift_is_caught_late_and_only_partly_contained():
-    on, off = metrics(run_scenario("gnss_drift", 1)), metrics(run_scenario("gnss_drift", 1, gating=False))
+    on, off = metrics(run_scenario("gnss_drift", 1, NO_RECOVERY)), metrics(run_scenario("gnss_drift", 1, gating=False))
     assert on["detect_delay_gnss_drift_s"] > 1.0      # a ramp starts below the gate: seconds, not 0
     assert on["rmse_during_gnss_drift_m"] < 0.5 * off["rmse_during_gnss_drift_m"]
     assert on["rmse_during_gnss_drift_m"] > 1.0       # but not as clean as the jump
@@ -105,7 +109,7 @@ def test_slow_drift_is_caught_late_and_only_partly_contained():
 def test_gyro_bias_step_makes_the_gated_filter_diverge():
     """The known flaw that M6 fixes: once its own heading is wrong, the filter rejects every
     GNSS fix (each looks like a fault) and dead-reckons away, while still feeling sure."""
-    r = run_scenario("gyro_bias_step", 1)
+    r = run_scenario("gyro_bias_step", 1, NO_RECOVERY)
     assert r.pos_err.max() > 100.0
     late = [ok for t, _, ok, _ in r.gnss_log if t > 70.0]
     assert not any(late)                              # nothing accepted any more

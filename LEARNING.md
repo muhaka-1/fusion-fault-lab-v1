@@ -291,3 +291,44 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 - [ ] I can explain every line of `stats.py`, `monitor.py` and the gating in `ekf.py`
 - [ ] I answered the questions above without notes
 - [ ] Committed and tagged `m05-gating-monitor`
+
+## M6 · Lock-out recovery and the benchmark
+
+**My plan (write before reading the new code):**
+
+-
+
+**What I learned / differences from the reference:**
+
+-
+
+**Explain it (answer out loud, then write one line each):**
+
+- Why does the gated filter lock itself out after the gyro bias step? (from M5, in one sentence)
+- What exactly does the recovery change in P, and why not the speed?
+- Why does inflating P make the next fixes pass the gate? (look at S = HPH' + R)
+- After the recovery the filter learns the new bias in ~25 s (0.0241). Why could M5 never learn it,
+  and M4 only slowly (0.0204)?
+- Why does the recovery make the slow drift 7x worse, and why is "NOMINAL while 29 m off" the most
+  dangerous result in the whole project so far?
+- The third drift recovery (89.2 s) comes after the fault ended. Did it help or hurt? Why?
+- Why can no lock-out length fix both faults? What information would the filter need to tell
+  "my heading is wrong" from "GNSS is slowly lying"? (hint: which sensors don't involve GNSS?)
+- Why does the benchmark average 10 seeds instead of reporting seed 1?
+
+**Experiments (predict first, then run):**
+
+- `EKFConfig(lockout_inflate=5)` and `EKFConfig(lockout_inflate=100)` on `gyro_bias_step` and
+  `gnss_drift`: what changes?
+- `python -m fusionlab.benchmark --seeds 3` vs 10: how much do the averages move?
+- Inflate only the heading and bias (not position) at recovery, by editing D in `update_gnss`:
+  does the gyro case still recover? Does the drift case get better or worse? (undo afterwards)
+
+**Done-checklist**
+
+- [ ] `python -m pytest -q` passes (68 tests), run twice
+- [ ] `python scripts/plot_m6.py` runs and I can explain all four panels
+- [ ] `python -m fusionlab.benchmark` runs and `docs/results.md` matches the README table
+- [ ] I can explain every new line in `ekf.py`, `run.py` and `benchmark.py`
+- [ ] I answered the questions above without notes
+- [ ] Committed and tagged `m06-recovery-benchmark`; Phase 1 done

@@ -1,4 +1,4 @@
-"""M5: Extended Kalman Filter with NIS gating, state = [x, y, psi, v, b_g].
+"""M6: Extended Kalman Filter with NIS gating and lock-out recovery, state = [x, y, psi, v, b_g].
 
 Prediction (100 Hz): the IMU is the control input; the gyro bias b_g is subtracted.
     x   += v cos(psi) dt        y += v sin(psi) dt
@@ -9,7 +9,9 @@ New in M3: the 5th state b_g and update_wheel().
 New in M5: gating. Before using a measurement, the filter checks its NIS against a chi-square
 threshold; a measurement that is too surprising is rejected instead of corrupting the state.
 Both updates now return (accepted, nis, dof).
-Not here yet: lock-out recovery for when the filter itself is the one that is wrong -> M6.
+New in M6: lock-out recovery. If GNSS has been rejected lockout_rejects times in a row (10 s at
+5 Hz), the filter's own estimate is more likely wrong than the sensor: it inflates the uncertainty
+of position, heading and bias so the gate can open again. lockout_rejects = 0 turns it off (= M5).
 
 Setting p0_bias = 0 and q_bias = 0 freezes b_g at 0, which gives exactly the M2 filter.
 """
@@ -32,7 +34,9 @@ class EKFConfig:
     p0_psi: float = 0.2
     p0_v: float = 1.0
     p0_bias: float = 0.02       # rad/s: "the bias is probably within +-0.02"
-    gate_prob: float = 0.999    # NEW: accept a measurement if its NIS is below the 99.9 % chi-square value
+    gate_prob: float = 0.999    # accept a measurement if its NIS is below the 99.9 % chi-square value
+    lockout_rejects: int = 50   # NEW: GNSS rejections in a row before recovery (10 s at 5 Hz); 0 = off
+    lockout_inflate: float = 25.0  # NEW: factor on the std of position, heading and bias at recovery
 
 
 def wrap(a: float) -> float:
@@ -44,6 +48,8 @@ class EKF:
     def __init__(self, x0, cfg: EKFConfig | None = None, gating: bool = True):
         self.cfg = cfg or EKFConfig()
         self.gating = gating
+        self.gnss_rejects = 0       # GNSS fixes rejected in a row
+        self.recoveries = 0         # how many times the lock-out recovery fired
         c = self.cfg
         self.x = np.array([x0[0], x0[1], x0[2], x0[3], 0.0], dtype=float)   # bias starts at 0: unknown
         self.P = np.diag([c.p0_pos**2, c.p0_pos**2, c.p0_psi**2, c.p0_v**2, c.p0_bias**2])
@@ -94,7 +100,18 @@ class EKF:
         """GNSS position fix (2-D). Returns (accepted, nis, dof); NIS averages 2 when all is well."""
         H = np.zeros((2, N)); H[0, 0] = 1.0; H[1, 1] = 1.0
         R = np.eye(2) * self.cfg.sigma_gnss**2
-        return self._update(np.asarray(z, dtype=float), H, R)
+        out = self._update(np.asarray(z, dtype=float), H, R)
+        self.gnss_rejects = 0 if out[0] else self.gnss_rejects + 1
+        if self.gating and self.cfg.lockout_rejects > 0 and self.gnss_rejects >= self.cfg.lockout_rejects:
+            # Lock-out recovery: GNSS has been rejected for so long that the filter's own estimate is
+            # more likely wrong than the sensor. Inflate position, heading and bias uncertainty (not
+            # speed: the wheel keeps that honest) so the next fixes fall inside the gate again.
+            f = self.cfg.lockout_inflate
+            D = np.diag([f, f, f, 1.0, f])
+            self.P = D @ self.P @ D
+            self.gnss_rejects = 0
+            self.recoveries += 1
+        return out
 
     def update_wheel(self, z: float):
         """Wheel-speed measurement (1-D). Returns (accepted, nis, dof); NIS averages 1."""

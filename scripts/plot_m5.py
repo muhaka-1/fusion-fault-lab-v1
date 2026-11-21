@@ -1,5 +1,7 @@
 """M5 check by eye: gating off vs on for each fault, with the monitor's status.
 
+Runs with lock-out recovery off (added in M6) so it still shows the M5 filter.
+
     python scripts/plot_m5.py            # writes docs/m5_gating.png and prints a table
 """
 import argparse, pathlib
@@ -7,6 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from fusionlab.ekf import EKFConfig
 from fusionlab.faults import SCENARIOS
 from fusionlab.run import run_scenario, metrics
 from fusionlab.stats import chi2_threshold
@@ -18,7 +21,7 @@ ap.add_argument("--seed", type=int, default=1)
 a = ap.parse_args()
 names = [n for n in SCENARIOS if n != "nominal"]
 off = {n: run_scenario(n, a.seed, gating=False) for n in names}
-on = {n: run_scenario(n, a.seed, gating=True) for n in names}
+on = {n: run_scenario(n, a.seed, EKFConfig(lockout_rejects=0), gating=True) for n in names}
 
 
 def status_strip(ax, r):
