@@ -229,26 +229,43 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 
 ## M5 · NIS gating and the fault monitor
 
-**My plan (write before reading the new code):**
+**My plan (written after reading the new code; next time, before):**
 
--
+- Gate each update: compute NIS, compare with the chi-square value for its dof at 99.9 %;
+  reject = leave x and P alone; updates return (accepted, nis, dof).
+- Monitor: sum the last 10 NIS per sensor for slow faults; status NOMINAL / DEGRADED (no accepted
+  fix for 1 s, or an alarm) / UNAVAILABLE (position σ > 5 m).
+- Detection delay = first rejection or alarm of the affected sensor; for a dropout, first non-NOMINAL.
+- Compare gating off vs on for every fault.
 
 **What I learned / differences from the reference:**
 
--
+- Same numbers as the reference (10 seeds): jump 4.16 -> 0.41 m, wheel 11.86 -> 0.41 m,
+  drift 7.27 -> 1.49 m, gyro bias step 12.33 -> 160 m (diverges).
+- Keeping bad data out is far cheaper than repairing it: no recovery period after the jump.
+- Gating can lock the filter out: after the gyro step it rejected every fix and never learned the
+  new bias (0.0042 instead of 0.024), 454 m off while its σ said 3 m.
+- Detection and protection are different: the alarm sees the jump without gating, but the filter
+  still uses the bad fixes.
+- Mean NIS includes rejected fixes (38.5 on the jump run although the filter was fine).
 
-**Explain it (answer out loud, then write one line each):**
+**Explain it:**
 
-- Why is the GNSS gate 13.8 and the wheel gate 10.8, both at 99.9 %?
-- At 99.9 %, how many good GNSS fixes per hour does the gate reject by mistake? Is that a problem?
-- Why does a rejected measurement leave both x and P untouched?
-- The drift is caught after 3.5 s, the jump after 0.0 s. Why? What does the windowed test add?
-- Why is the dropout detected by the status (a timeout), not by the gate?
-- The jump: with gating on the filter is fine immediately after the fault. Compare with M4, where
-  it was still 7 m off 20 s later. Why the difference?
-- The gyro bias step: why does gating make it 13x *worse*? Why does the status stay DEGRADED instead
-  of UNAVAILABLE while the filter is 450 m off?
-- Gating with alarm off vs on: in `--no-gating` runs the detection delays are still reported. Why?
+- 13.8 vs 10.8: same 99.9 % false-alarm rate, different dof (GNSS 2 values, wheel 1); more values ->
+  bigger normal NIS -> higher gate.
+- False rejections: ~0.1 % of 18 000 fixes/h ≈ 18/h (measured 0.12 %); harmless, next fix in 0.2 s,
+  DEGRADED only after 1 s.
+- Rejected = untouched x and P: changing x lets bad data in; shrinking P would make the filter more
+  confident without learning anything. P keeps growing honestly in predict.
+- Jump 0.0 s vs drift 3.6 s: the jump's first fix is 40 m off (NIS ~700); the drift starts at 0 and the
+  filter partly follows it, so NIS creeps up (0.6 -> 8.8) before the first rejection (15). The window
+  catches errors that stay just under the gate every time.
+- Dropout: no measurements, nothing to gate; a timeout (no accepted fix > 1 s) catches the silence (0.8 s).
+- Jump OK right after with gating: the bad fixes never entered the state, so nothing to repair; in M4
+  they bent position, heading and bias and the overconfident filter needed ~40 s.
+- Gyro step 13x worse: the wrong heading makes honest fixes look like faults; all rejected after ~70 s,
+  so no correction. Only DEGRADED because σ only models normal noise: 3 m σ at 454 m error.
+- Detection with --no-gating: the monitor runs anyway; knowing (alarm at 0.0 s) is not protecting.
 
 **Experiments (predict first, then run):**
 
