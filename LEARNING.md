@@ -161,28 +161,44 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 - [ ] I can explain every new line in `src/fusionlab/ekf.py`
 - [ ] I answered the questions above without notes
 - [ ] Committed and tagged `m03-bias-wheel`
+
 ## M4 · Fault injection and metrics
 
-**My plan (write before reading faults.py):**
 
--
+**My plan (written after reading faults.py; next time, before):**
+
+- A Fault = kind, start, end, magnitude; apply it to a copy of the recorded sensor data only.
+- Five kinds: GNSS dropout (remove fixes), jump (offset), drift (growing ramp), wheel scale
+  (multiply), gyro bias step (add to gyro). Unknown kind -> error.
+- Scenarios = named fault lists; run_scenario simulates, injects and runs the filter.
+- Measure inside each fault window and 20 s after: RMSE, max error, max NIS.
 
 **What I learned / differences from the reference:**
 
--
+- Same numbers as the reference "fault handling off": dropout 0.53, jump 9.47, drift 7.55,
+  wheel 16.48, gyro 16.25 m during (seed 1). Seed 3 within ~6 %: the faults are systematic.
+- Missing data (dropout) is cheap with a good model; wrong data (jump, wheel) is expensive.
+- Faults corrupt states they don't touch directly: the jump bent heading -4.2° and bias to 0.0060.
+- Damage outlasts the fault because the filter is overconfident (pos σ 0.30 m at 12.8 m error).
+- After the bias step the filter is still learning at 120 s (0.0204 of 0.024).
+- The wheel is an independent sensor: without it the jump does 16.0 m instead of 9.5 m.
 
-**Explain it (answer out loud, then write one line each):**
+**Explain it:**
 
-- Why inject faults into recorded data instead of into the simulator's truth?
-- Why is a 20 s GNSS dropout almost harmless (0.5 m), when a 6 s jump costs 13 m?
-- The jump lasts 6 s, but the error is still 7 m 20 s later. Why does the filter recover so slowly?
-  (hint: what is K late in the run, from M2?)
-- Why does the wheel fault hurt the position so much, when the wheel only measures speed?
-  And why is the error still growing at the moment the fault ends?
-- The gyro bias step: the filter does learn the new bias in the end (it reaches ~0.02). Why does it
-  take so long, and what does q_bias have to do with it? (M3)
-- Which fault can the NIS *not* show, and what could detect it instead?
-- After the jump ends, why does the NIS stay above 2 for ~40 s?
+- Faults go into sensor data, not truth: a fault is a lying sensor; the truth stays the yardstick, and the
+  same seed makes faulty vs normal a fair comparison.
+- Dropout 0.9 m vs jump 12.8 m: a dropout removes information (dead reckoning is good), a jump adds wrong
+  information the filter acts on.
+- Slow recovery: overconfident (σ 0.30 m at 12.8 m error) so K is small; and heading/bias were corrupted
+  too, so they keep steering it off until corrected (~40 s).
+- Wheel fault: the filter trusts wheel speed (0.1 m/s), believes +1.9 m/s too fast; position integrates
+  speed, so error grows until the fault ends; then heading (+2°) and position unwind slowly.
+- Bias step: the filter is 200σ sure of the old bias and q_bias lets it change only ~1e-4 in 70 s, so it
+  creeps (0.0048 at 60 s ... 0.0204 at 120 s). q_bias 1e-4: 3.5 m on the fault, +18 % nominal.
+- NIS can't see a dropout (no fixes): use a timeout (no accepted fix > 1 s) and the filter's own σ (> 5 m).
+  Slow drift is hard per sample: sum the NIS over a window (M5).
+- NIS stays high after the jump (mean 16 for 56–100 s) because the filter is still wrong and overconfident:
+  a lasting high NIS means "I am wrong", not "the sensor is wrong".
 
 **Experiments (predict first, then run):**
 
