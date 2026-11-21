@@ -294,27 +294,38 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 
 ## M6 · Lock-out recovery and the benchmark
 
-**My plan (write before reading the new code):**
+**My plan (written after reading the new code; next time, before):**
 
--
+- Count GNSS rejections in a row; after 50 (10 s), assume the filter is wrong: multiply the std of
+  position, heading and bias by 25 (not speed), reset the count, count recoveries.
+- lockout_rejects = 0 turns it off; record recovery times in run.py; --no-recovery flag.
+- Benchmark: every scenario x {off, gating, gating+recovery} x 10 seeds -> docs/results.md.
 
 **What I learned / differences from the reference:**
 
--
+- Same benchmark as the reference: gyro 209.9 -> 7.77 m with recovery; drift 2.42 -> 17.57 m.
+- Recovery = admitting "I might be wrong": σ 0.53 -> 13.2 m, status briefly UNAVAILABLE.
+- After recovery the filter learns the new bias (within 10 % after 19 s, 0.0241 vs 0.024).
+- Fixed a metric bug: bias_err_final ignored the bias step (now 0.0001 with recovery, -0.0198 without).
+- No lock-out length wins both faults (2 s: gyro 1.8 / drift 20 m; 30 s: 194 / 2.0 m).
 
-**Explain it (answer out loud, then write one line each):**
+**Explain it:**
 
-- Why does the gated filter lock itself out after the gyro bias step? (from M5, in one sentence)
-- What exactly does the recovery change in P, and why not the speed?
-- Why does inflating P make the next fixes pass the gate? (look at S = HPH' + R)
-- After the recovery the filter learns the new bias in ~25 s (0.0241). Why could M5 never learn it,
-  and M4 only slowly (0.0204)?
-- Why does the recovery make the slow drift 7x worse, and why is "NOMINAL while 29 m off" the most
-  dangerous result in the whole project so far?
-- The third drift recovery (89.2 s) comes after the fault ended. Did it help or hurt? Why?
-- Why can no lock-out length fix both faults? What information would the filter need to tell
-  "my heading is wrong" from "GNSS is slowly lying"? (hint: which sensors don't involve GNSS?)
-- Why does the benchmark average 10 seeds instead of reporting seed 1?
+- Lock-out: wrong heading -> honest fixes look like faults -> rejected -> heading never corrected; self-reinforcing.
+- Recovery scales std of x, y, heading, bias by 25 (variance 625), keeps their correlations; speed untouched
+  because the wheel kept it right.
+- NIS = yᵀS⁻¹y, S = HPHᵀ + R: y is unchanged but S grows from 2.4 to ~90, so a ~30 m innovation drops from
+  NIS 391 to ~11, under the 13.8 gate.
+- Bias learning needs fixes getting in AND a willing bias: M5 had no fixes, M4 had fixes but tiny bias σ
+  (crept to 0.0204); recovery gives both -> 0.0241.
+- Drift 7x worse: the rejections were right, recovery overrides them and follows the drifting GNSS.
+  NOMINAL at 29 m off is worst because nothing downstream knows to stop trusting the position.
+- 89.2 s recovery helped: GNSS honest again, filter 37 m off and locked out; recovery let the honest fixes in.
+  Same mechanism, right when the filter is wrong, wrong when the sensor is wrong.
+- No length wins both: both faults look the same in GNSS innovations; need non-GNSS evidence (wheel vs IMU,
+  turn rate checks) or the error's shape over time (GLR / CUSUM).
+- 10 seeds: one seed can be luck; jump ranged 0.0–0.6 m across seeds, gyro 7.2–8.5 m. Averages make
+  comparisons fair.
 
 **Experiments (predict first, then run):**
 
