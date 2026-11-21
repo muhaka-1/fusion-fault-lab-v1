@@ -39,6 +39,19 @@
 
 ## M2 · EKF: predict and GNSS update
 
+The experiments, with results
+
+Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× the bias, 2.5× the error), and the NIS with its square (≈ 6×), because NIS is a squared quantity.
+
+sigma_gnss=0.5 (telling the filter GNSS is 3× better than it is):
+
+        Drive	    Setting	    RMSE	   Mean NIS	    Within 2σ
+        with bias	honest 1.5	7.28 m	    25	        12 %
+        with bias	0.5	        2.74 m	    46	        4 %
+        no bias	    honest 1.5	0.26 m	    1.96	    100 %
+        no bias	    0.5	        0.35 m	    17.6	    62 %
+
+
 **My plan (written after reading ekf.py; next time, before):**
 
 - State [x, y, heading, speed]; IMU (gyro, acc) as input to the prediction every 10 ms.
@@ -122,6 +135,15 @@
   the heading? Is the filter still consistent?
 - `python -m fusionlab.run --no-wheel --seed 4` vs with the wheel: how much does the wheel help on
   a different drive?
+
+**Experiment results:**
+
+| Experiment | Result | What it shows |
+|---|---|---|
+| `--bias -0.006` | 0.274 m, bias learned exactly (−0.0060) | sign and size don't matter |
+| `p0_bias=0.001` (told the bias is tiny) | bias every 10 s: 0, 0.0003, 0.0024, 0.0037, 0.0040; RMSE 0.33 m | a too-confident start slows learning from ~10 s to ~40 s (default: 0.0043 already at 10 s) |
+| `q_bias=1e-3` (bias may wander 100× faster) | RMSE 0.42 m; bias jumps between 0.0015 and 0.0063 after 30 s; σ 0.0027; NIS 1.95 | still consistent, but noisy: it chases noise as if it were bias changes |
+| wheel on / off, seeds 2, 3, 4 | 0.38 / 0.52, 0.51 / 0.57, 0.43 / 0.50 m; speed 0.009 / 0.06 m/s | the wheel helps on every drive; speed is always ~7× better |
 
 **Done-checklist**
 
