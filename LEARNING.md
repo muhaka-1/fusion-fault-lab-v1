@@ -107,43 +107,52 @@ sigma_gnss=0.5 (telling the filter GNSS is 3× better than it is):
 
 ## M3 · Gyro bias and wheel speed
 
-**My plan (write before reading the new parts of ekf.py):**
+**My plan (written after reading ekf.py; next time, before):**
 
--
+- Add b_g as a 5th state, subtract it in predict: psi += (gyro - b_g) dt, and F[2,4] = -dt.
+- Let the bias wander slowly (q_bias) and start it at 0 with a wide P0 (0.02).
+- Add update_wheel: a 1-D measurement of speed (H picks state 3, R = 0.1²).
+- Compare all four combinations: with/without bias state, with/without wheel.
 
-**What I learned / differences from the reference:**
+**What I learned :**
 
--
+- Same numbers as the reference: 0.275 m with both, 7.34 m without the bias state, 0.32 m
+  without the wheel, 0.277 m with bias 0.01; the bias is learned as 0.0040.
+- The bias state fixes position (27x) and makes the filter honest again (NIS 1.96 / 0.97).
+- The wheel makes speed ~7x better on every seed, but does nothing about the bias.
+- Freezing the bias state with the wheel off reproduces M2 exactly (7.281 m): M3 only adds.
+- Observability: bias is learned on a straight road too (0.0040 after 40 s), but NOT at standstill
+  (σ stays 0.013): heading only affects position when the car moves.
 
-**Explain it (answer out loud, then write one line each):**
+**Explainations:**
 
-- Nothing measures the bias directly. How does the filter learn it? (look at F[2, 4] and at what
-  GNSS fixes say about heading)
-- Why does it take 20–30 s to learn, and why is that time the same for a bias of 0.004 and 0.01?
-- Why is the bias modelled as a slow random walk (q_bias) instead of a fixed constant?
-- What would happen if the car only drove straight at constant speed? (hint: observability)
-- The wheel measures speed only. Why does it still improve the position a little (0.32 -> 0.27 m)?
-- Why does the wheel NIS average 1 while the GNSS NIS averages 2?
-- Why does `update_wheel` move only the speed at the start, but later also nudge x, y and heading?
-
-**Experiments (predict first, then run):**
-
-- `python -m fusionlab.run --bias -0.006`: does a negative bias work as well?
-- `EKFConfig(p0_bias=0.001)`: the filter is told the bias is almost certainly tiny. How long does it
-  take to learn 0.004 now? Look at the bias panel of a plot or print `r.est[::500, 4]`.
-- `EKFConfig(q_bias=1e-3)`: the bias may wander 100x faster. What happens to the bias estimate and
-  the heading? Is the filter still consistent?
-- `python -m fusionlab.run --no-wheel --seed 4` vs with the wheel: how much does the wheel help on
-  a different drive?
+- How is the bias learned? Predict links bias -> heading (F[2,4]) -> position (F[0,2]) in P; a GNSS
+  fix that shows a sideways error corrects the bias through those correlations. Without F[2,4], no learning.
+- Why 20–30 s, same for any size? The bias shows only after two integrations and must stand out
+  against 1.5 m noise; P and K don't depend on the true bias, so the error shrinks at the same rate.
+- Why a random walk? Real biases change (temperature, age, power-on); a constant would drive P to 0
+  and the filter would stop learning and miss a bias step. q_bias keeps a small floor (σ 7e-5).
+- Straight at constant speed? Still learned: a heading error makes a moving car drift sideways.
+  Standing still is unobservable: heading then has no effect on position.
+- Wheel improves position: better speed -> less error in distance travelled between fixes
+  (along-track); GNSS + bias handle the cross-track error.
+- Wheel NIS 1, GNSS NIS 2: NIS averages its degrees of freedom; speed is 1 number, a fix is 2.
+- update_wheel moves only speed at first because P0 is diagonal; predict then links speed to position
+  (F[0,3], F[1,3]), so later a speed surprise also moves x, y (+0.3 m/s -> +0.23 m along track).
 
 **Experiment results:**
 
-| Experiment | Result | What it shows |
-|---|---|---|
-| `--bias -0.006` | 0.274 m, bias learned exactly (−0.0060) | sign and size don't matter |
-| `p0_bias=0.001` (told the bias is tiny) | bias every 10 s: 0, 0.0003, 0.0024, 0.0037, 0.0040; RMSE 0.33 m | a too-confident start slows learning from ~10 s to ~40 s (default: 0.0043 already at 10 s) |
-| `q_bias=1e-3` (bias may wander 100× faster) | RMSE 0.42 m; bias jumps between 0.0015 and 0.0063 after 30 s; σ 0.0027; NIS 1.95 | still consistent, but noisy: it chases noise as if it were bias changes |
-| wheel on / off, seeds 2, 3, 4 | 0.38 / 0.52, 0.51 / 0.57, 0.43 / 0.50 m; speed 0.009 / 0.06 m/s | the wheel helps on every drive; speed is always ~7× better |
+Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× the bias,
+2.5× the error), and the NIS with its square (≈ 6×), because NIS is a squared quantity.
+
+`sigma_gnss=0.5` (telling the filter GNSS is 3× better than it is):
+
+| Drive | Setting | RMSE | Mean NIS | Within 2σ |
+|---|---|---|---|---|
+| with bias | honest 1.5 | 7.28 m | 25 | 12 % |
+| with bias | 0.5 | 2.74 m | 46 | 4 % |
+| no bias | honest 1.5 | 0.26 m | 1.96 | 100 % |
+| no bias | 0.5 | 0.35 m | 17.6 | 62 % |
 
 **Done-checklist**
 
