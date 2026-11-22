@@ -5,6 +5,7 @@
 #   M10: ECU and nav supervision R6-R9, R11-R13
 #   M11: the bus (UDP multicast), cluster_core and display_term as separate processes
 #   M12: the EKF, chi-square gate and fault monitor in C (fc_nav), nav_replay for the parity test
+#   M13: the nav node (nav_node.c) and the nav process on the bus
 cmake_minimum_required(VERSION 3.16)
 project(fusion_target C)
 
@@ -31,7 +32,7 @@ target_link_libraries(fc_common m)          # lround, fmod
 add_library(fc_core STATIC src/core/cluster_core.c)
 target_link_libraries(fc_core fc_common)
 
-add_library(fc_nav STATIC src/nav/ekf.c src/nav/chi2.c src/nav/monitor.c)
+add_library(fc_nav STATIC src/nav/ekf.c src/nav/chi2.c src/nav/monitor.c src/nav/nav_node.c)
 target_link_libraries(fc_nav fc_common)
 
 add_executable(e2e_demo tools/e2e_demo.c)
@@ -61,6 +62,10 @@ if(NOT WIN32)
   add_executable(cluster_core src/core/core_main.c)
   target_compile_definitions(cluster_core PRIVATE _POSIX_C_SOURCE=200809L)
   target_link_libraries(cluster_core fc_core fc_posix)
+
+  add_executable(nav src/nav/nav_main.c)
+  target_compile_definitions(nav PRIVATE _POSIX_C_SOURCE=200809L)
+  target_link_libraries(nav fc_nav fc_posix)
 
   add_executable(display_term src/display/display_term.c)
   target_compile_definitions(display_term PRIVATE _POSIX_C_SOURCE=200809L)

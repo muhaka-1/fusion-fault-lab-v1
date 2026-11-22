@@ -729,3 +729,50 @@ no CRC could detect. Real cars meet this when an ECU is swapped or flashed with 
 - [x] I ran `plot_m12.py` and can explain both panels
 - [x] CI is green, including the parity step
 - [x] Committed and tagged `m12-ekf-in-c`
+
+## M13 · The nav node on the bus
+
+**My plan (write before reading nav_node.c):**
+
+-
+
+**What I learned / differences from the reference:**
+
+-
+
+**Explain it (answer out loud, then write one line each):**
+
+- Why can't the filter start at once? What does alignment measure, and why "≥ 1 s and ≥ 5 m"?
+- Why correct the chord direction by the gyro turn since the chord's midpoint?
+- Why does alignment start the position uncertainty at `sigma_gnss`, not at `p0_pos`?
+- The node's clock is the IMU frame count, not the wall clock. Name two things this makes possible.
+- How does the node notice lost IMU frames, and how does it account for them in the prediction?
+- Why must it align again after an IMU loss, instead of predicting across the gap? Why is the
+  100 ms IMU timeout (10 frames) safe with a counter that wraps at 15?
+- Sensor frames: why is the *first* frame after a resync (INITIAL) used here, while the cluster
+  core waits for 3 good ECU frames?
+- What does NAV_STATE's `gnss_rejecting` flag say that DEGRADED alone doesn't?
+- Why does `sensorplay` send "no fix" GNSS frames in a dropout instead of sending nothing?
+- `sensorplay --speed 4` works. What would break if the node used the wall clock for `dt`?
+- In the end-to-end jump test, three programs react. Which one decides what the driver sees?
+
+**Experiments (predict first, then run):**
+
+- Four windows (nav, cluster_core, display_term, sensorplay `--scenario gnss_jump`). Watch the
+  display between 50 and 56 s. What does POSITIONING show, and the heading?
+- `sensorplay --scenario gnss_dropout --plot`: what happens to `pos_std` and the status during the
+  20 s tunnel? When does it go UNAVAILABLE, and why then?
+- `sensorplay --scenario gyro_bias_step --speed 4`: when does the recovery happen (`recoveries`
+  in the output)? Compare with M6.
+- Start `nav --no-gating`, then play gnss_jump. What error do you see during the jump?
+- `sensorplay --imu-gap 30:31`: what does `nav -v` print, and how long until NOMINAL again?
+- Start sensorplay *before* nav, then nav 5 s later. Does nav still align? Why?
+
+**Done-checklist**
+
+- [ ] `unit_tests` says 68/68, and the system and parity tests pass in WSL (22)
+- [ ] I ran the four-window setup and saw the jump rejected on the display
+- [ ] I ran `sensorplay --plot` and can explain both panels
+- [ ] I answered the questions above without notes
+- [ ] CI is green
+- [ ] Committed and tagged `m13-nav-node`

@@ -1,5 +1,7 @@
-"""M11 system test: the real C processes (cluster_core, display_term) on the simulated CAN bus,
-driven by the Python mini bench. Every check is on what actually crosses the bus.
+"""System tests: the real C processes on the simulated CAN bus. Every check is on what actually
+crosses the bus.
+  M11: cluster_core + display_term, driven by the Python mini bench
+  M13: + the nav process, fed by the sensor player (simulated drive with faults)
 
 Needs the C target built for this OS (cmake -S target -B target/build && cmake --build target/build)
 and UDP multicast on loopback. Skipped otherwise, e.g. in Git Bash on Windows: run it in WSL.
@@ -142,3 +144,77 @@ def test_nav_loss_and_core_crash(rig):
     lines = log.read_text().splitlines()
     assert lines and lines[-1].endswith("NO SIGNAL FROM CORE")       # the display blanks itself
     assert any("pos=NAV DATA LOST heading=--" in line for line in lines)
+
+
+# ---- M13: the nav process in the loop ---------------------------------------------------------
+@pytest.fixture
+def stack(tmp_path):
+    """nav + cluster_core + display_term. The mini bench plays ECU and inputs only (no NAV_STATE)."""
+    exes = {n: BUILD / n for n in ("nav", "cluster_core", "display_term")}
+    if not all(e.exists() for e in exes.values()) or not _runnable(exes["nav"]):
+        pytest.skip("nav / cluster_core not built for this OS (build the C target in WSL / Linux)")
+    if not _multicast_ok():
+        pytest.skip("UDP multicast on loopback not available here")
+    port = 46000 + random.randrange(2000)
+    cfg = BusConfig(port=port)
+    env = {**os.environ, "CANBUS_PORT": str(port)}
+    procs = {n: subprocess.Popen([str(e)] + (["--plain"] if n == "display_term" else []), env=env,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for n, e in exes.items()}
+    bench = MiniBench(cfg)
+    bench.set(nav="off")
+    bench.start()
+    yield cfg, bench, procs
+    bench.stop()
+    for p in procs.values():
+        if p.poll() is None:
+            p.send_signal(signal.SIGINT)
+    for p in procs.values():
+        try:
+            p.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            p.kill()
+
+
+def test_nav_node_aligns_and_tracks(stack):
+    from fusionlab.sensorplay import SensorPlayer
+    cfg, bench, _ = stack
+    p = SensorPlayer("nominal", seed=2, speed=4, bus_cfg=cfg)
+    p.run(duration=20.0)
+    e = p.errors()
+    assert e, "no aligned estimate from nav"
+    assert e[0][0] < 3.0                                       # aligned within 3 s of driving
+    late = [r[1] for r in e if r[0] > 5.0]
+    assert max(late) < 2.0 and all(r[2] == "NOMINAL" for r in e if r[0] > 5.0)
+    c = bench.cluster()                                        # and the cluster shows it
+    assert c["b"]["pos_text"] == "OK" and c["b"]["heading_deg"] is not None
+
+
+def test_gnss_jump_rejected_end_to_end(stack):
+    """A 40 m GNSS jump: nav rejects it, the cluster goes amber, the position stays right."""
+    from fusionlab.sensorplay import SensorPlayer
+    cfg, bench, _ = stack
+    p = SensorPlayer("gnss_jump", seed=2, speed=5, bus_cfg=cfg)
+    amber = []
+
+    def watch(player, i):
+        c = bench.cluster()
+        if c["a"] and 50.0 <= player.data.t[i] <= 57.0:
+            amber.append(c["a"]["pos_amber"])
+
+    p.run(duration=62.0, every_second=watch)
+    during = [r for r in p.errors() if 50.0 <= r[0] <= 56.0]
+    assert during and max(r[1] for r in during) < 2.0          # the 40 m jump did not pull the estimate
+    assert any("gnss_rejecting" in r[4] for r in during)
+    assert any(amber), "cluster never showed the amber POSITIONING lamp"
+
+
+def test_imu_loss_makes_nav_unavailable(stack):
+    from fusionlab.sensorplay import SensorPlayer
+    cfg, bench, _ = stack
+    p = SensorPlayer("nominal", seed=2, speed=2, bus_cfg=cfg, imu_gap=(8.0, 9.0))
+    p.run(duration=12.0)
+    flags = [fl for _, _, _, st, _, fl in p.log if st == "UNAVAILABLE"]
+    assert any("imu_lost" in f for f in flags)
+    after = [st for step, _, _, st, _, _ in p.log if p.data.t[step] > 9.0]
+    assert "ALIGNING" in after                                 # 100 lost frames: time unknown, align again
+    assert after[-1] == "NOMINAL"                              # and back to normal

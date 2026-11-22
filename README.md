@@ -19,7 +19,8 @@ module at a time; each module ends in tests that pass.
 | M10 · Cluster core: ECU and nav supervision | done |
 | M11 · Bus and processes | done |
 | M12 · EKF in C, parity with Python | done |
-| M13 · Nav node on the bus | next |
+| M13 · Nav node on the bus | done |
+| M14 · Bench | next |
 
 ## M1 · Simulator
 
@@ -385,3 +386,48 @@ python3 scripts/plot_m12.py                        # docs/m12_parity.png, plus t
 ```
 
 ![C and Python filter on the same data](docs/m12_parity.png)
+
+## M13 · The nav node on the bus
+
+The C filter from M12 becomes a process, `nav`, like the navigation ECU in a car:
+
+```
+ sensorplay (Python)          nav (C)                    cluster_core (C)        display_term (C)
+ IMU 100 Hz ──┐
+ WHEEL 50 Hz ─┼──▶  align, EKF, gating, monitor  ── NAV_STATE 10 Hz ──▶  POSITIONING lamp  ──▶  heading, status
+ GNSS 5 Hz ───┘     (target/src/nav/nav_node.c)    NAV_POSE, NAV_DIAG
+```
+
+* **`nav_node.c`** is the whole node without I/O, so it is unit tested like the cluster core.
+  - *Alignment:* the filter needs a heading, and a car standing still can't measure one. The node
+    integrates the gyro and collects GNSS fixes until two are ≥ 1 s and ≥ 5 m apart. Then it
+    takes the direction between them (corrected by the gyro turn since) and starts the EKF.
+    Status ALIGNING until then.
+  - *Its clock is the IMU:* time = number of IMU frames × 10 ms, with lost frames counted from the
+    alive counter. Runs are repeatable, and playback can be faster than real time.
+  - *IMU loss:* silent for 100 ms → UNAVAILABLE + IMU_LOST. When the IMU returns, **it aligns again**.
+    After 10 or more lost frames the counter (which wraps every 15) can't say how much time has
+    passed, so predicting across the gap would put the car in the wrong place. (Found by the
+    system test in this module; `node_realigns_after_long_imu_loss` guards it.)
+* **`python3 -m fusionlab.sensorplay`** replays a simulated drive with any M4 fault onto the bus
+  in real time (or `--speed 4`). It compares what `nav` sends with the truth, prints a line per
+  second, and `--plot` writes `docs/m13_onbus.png`.
+* **`busctl bench --no-nav`**: the mini bench without its fake NAV_STATE (two senders on one ID
+  break the alive counters, as seen in M11).
+* **System tests:** nav aligns and tracks. A 40 m GNSS jump is rejected *end to end* (nav
+  rejects it, the cluster goes amber, the position stays right). IMU loss → UNAVAILABLE → re-align.
+
+```bash
+# WSL
+cmake -S target -B target/build -DSANITIZE=ON && cmake --build target/build
+./target/build/unit_tests                                        # 68/68 tests passed
+python3 -m pytest -q tests/test_system.py tests/test_parity.py   # 22 passed
+
+# four Ubuntu windows, all in the repo folder:
+./target/build/nav -v                                            # 1: navigation
+./target/build/cluster_core -v                                   # 2: the decider
+./target/build/display_term                                      # 3: the cluster
+PYTHONPATH=src python3 -m fusionlab.sensorplay --scenario gnss_jump --plot   # 4: the car's sensors
+```
+
+![the nav node on the bus](docs/m13_onbus.png)

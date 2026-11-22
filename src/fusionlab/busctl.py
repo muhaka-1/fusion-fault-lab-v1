@@ -149,9 +149,13 @@ def cluster_line(c: dict, blinking: frozenset = frozenset()) -> str:
             f"  positioning {pos}  heading {hd}")
 
 
-def run_bench() -> int:
-    bench = MiniBench().start()
-    print("mini bench on the CAN bus. 'help' lists the commands.")
+def run_bench(no_nav: bool = False) -> int:
+    bench = MiniBench()
+    if no_nav:
+        bench.set(nav="off")                     # the real nav process (M13) sends NAV_STATE
+    bench.start()
+    print("mini bench on the CAN bus. 'help' lists the commands."
+          + ("  (not sending NAV_STATE: the nav process does that)" if no_nav else ""))
     stop = threading.Event()
 
     lit_at = {"left": 0.0, "right": 0.0}
@@ -260,13 +264,14 @@ def run_monitor(seconds: float, ids: set[int]) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python3 -m fusionlab.busctl", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("bench", help="play input board, ECU and nav; type commands")
+    bp = sub.add_parser("bench", help="play input board, ECU and nav; type commands")
+    bp.add_argument("--no-nav", action="store_true", help="don't send NAV_STATE (use with the nav process, M13)")
     m = sub.add_parser("monitor", help="show the traffic on the bus")
     m.add_argument("--seconds", type=float, default=0, help="stop after N seconds (default: never)")
     m.add_argument("--ids", default="", help="print every frame of these ids, e.g. 0x400,0x401")
     a = ap.parse_args(argv)
     if a.cmd == "bench":
-        return run_bench()
+        return run_bench(a.no_nav)
     return run_monitor(a.seconds, {int(x, 16) for x in a.ids.split(",") if x})
 
 

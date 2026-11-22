@@ -1,7 +1,7 @@
 # Continuous integration for fusion-fault-lab-v1.
 #   tests:      every push and pull request, Linux + Windows, Python 3.11 + 3.12
 #   c-target:   the C code (from M7): gcc with sanitizers, clang, and MSYS2 gcc on Windows;
-#               on Linux also the system test (M11) and the C/Python filter parity (M12)
+#               on Linux also the system tests (M11, M13: nav in the loop) and the parity (M12)
 #   benchmark:  after the tests pass on main, or by hand (Actions tab -> CI -> Run workflow);
 #               redraws the plots, runs the benchmark, uploads them as a downloadable artifact
 name: CI
@@ -77,7 +77,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: System test (M11) and C/Python parity (M12)
+      - name: System tests (M11, M13) and C/Python parity (M12)
         run: |
           python -m pip install pytest numpy scipy
           python -m pytest -q tests/test_system.py tests/test_can_contract.py tests/test_parity.py
