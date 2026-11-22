@@ -485,92 +485,114 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 - [x] `can_vectors | diff - tests/can_vectors.txt` prints nothing
 - [x] `python -m pytest -q` passes in Git Bash (73 passed, 1 skipped)
 - [x] Committed and tagged `m08-can-messages`
+
 ## M9 · Cluster core: inputs
 
-**My plan (write before reading cluster_core.c):**
 
--
+**Explain it:**
 
-**What I learned / differences from the reference:**
+- **Count samples instead of a fixed wait:** a timer started at the first edge latches whatever
+  level happens to be there when it ends, which can still be bounce. Counting needs 3 samples
+  *in a row* that agree, so the level has really settled. It also needs no extra timer per input.
+- **One agreeing sample resets the count:** that is what makes it "3 in a row". Without the reset,
+  bounce like 1,0,1,1 adds up to 3 disagreeing samples and toggles in the middle of the bounce.
+- **Hazard on the rising edge:** the hazard button is a push button. If the level toggled the
+  hazard, holding the button would toggle it every 10 ms. The edge gives one toggle per press.
+- **Left + right = no indicator:** a stalk can't be in both positions, so this is a short or a
+  wiring fault. Blinking the wrong side tells other drivers a lie, which is worse than no
+  indicator. Doing nothing is the safe choice.
+- **Start lit, restart the phase on a change:** the driver and other road users see the effect at
+  once. If the old phase continued, a new indicator could start in its off half and stay dark for
+  up to 333 ms.
+- **Where the time comes from:** `blink_lit` gets `now_ms` as an argument. The core never reads a
+  clock, so tests run hours of blinking in microseconds, every run gives the same result, and the
+  same code runs on QNX. The main program passes the real monotonic clock (M11).
+- **Reset after an input fault:** during the outage the switches may have changed (the hazard
+  button pressed, the stalk released). Carrying on with the old state would be stale, so the core
+  starts clean from fresh readings.
+- **A corrupt frame doesn't refresh the timeout:** the timeout means "no trustworthy information".
+  If garbage counted, a broken board sending garbage would keep the old lamps on forever.
+- **Restart the 50 ms grid after a stall:** sending all the missed frames in a burst floods the bus
+  with old states, and the display replays the past. One current frame, then a steady grid.
+- **Gauges `--` in M9 (R13):** there is no ECU data yet. 0 km/h would be a lie (the car could be
+  moving). `--` says "unknown".
 
--
+**Experiment results:**
 
-**Explain it (answer out loud, then write one line each):**
-
-- Why debounce by counting samples instead of waiting a fixed time after the first change?
-- Why does one agreeing sample reset the counter in `debounce_step`? What would bounce do without it?
-- Why does the hazard toggle on the *rising edge* of the debounced level, not on the level itself?
-- Why is "left and right at once" treated as no indicator instead of picking one side?
-- Why must the indicator start lit, and why restart the phase when the side changes?
-- 90 blinks a minute gives a period of 667 ms. Where does `blink_lit` get its time from, and why
-  is the core not allowed to read the clock itself?
-- After an input fault (R10), why reset the debouncer and the hazard state instead of continuing?
-- Why does a corrupted INPUTS frame not refresh the timeout, even though a frame did arrive?
-- Why does `core_tick` restart its 50 ms grid after a stall instead of sending the missed frames?
-- The gauges show `--` in M9. Which rule says so, and why not show 0?
-
-**Experiments (predict first, then run):**
-
-- `cluster_sim 0:- 200:L 3000:-`: count the columns of one blink. Do you get 90 per minute?
-- `cluster_sim 0:- 200:~L 1000:- 1200:L 1220:- 1240:L 1260:- 2000:-`: which presses light the
-  indicator, and why does the 20 ms tap pattern never get through?
-- `cluster_sim 0:- 200:H 300:- 1000:H 1050:- 2000:-`: is the second press (50 ms) long enough?
-  Try 20 ms instead.
-- `cluster_sim 0:- 200:D 600:DX 650:D 1500:-`: why is there no INPUT FAULT for a 50 ms gap? How
-  long must the gap be?
-- Set `DEBOUNCE_SAMPLES` to 1 in `cluster_core.h` and rebuild. Which tests fail? Then run
-  `cluster_sim 0:- 200:~R 1500:-`. Undo afterwards.
-- Change `BLINK_ON_MS` to 400. Which test catches it?
+| Experiment | Result |
+|---|---|
+| `0:- 200:L 3000:-` | 7 columns on, 6 off (sometimes 6/7) ≈ 667 ms → **90/min**. 4 full blinks + a partial one in 2.8 s, cut off within 30 ms of release |
+| bounced press + 20 ms taps | the bounced press lights the indicator. The 20 ms taps (2 samples) never reach 3 in a row: **nothing** |
+| hazard: 50 ms vs 20 ms press | 50 ms (5 samples) **turns it off**. 20 ms is **ignored**, the hazard stays on |
+| `600:DX 650:D`: 50 ms gap | **no INPUT FAULT.** The board must be silent from 600 to **710 ms or more**. The fault needs > 100 ms since the last good frame (590), and at 700 a frame arrives just in time |
+| `DEBOUNCE_SAMPLES 1` | **45/49**: the 3 debounce tests and `indicator_starts_lit` fail (lamp starts 20 ms earlier). And a **20 ms tap now turns the hazard off**: noise is now a command |
+| `BLINK_ON_MS 400` | **47/49**: `blink_90_per_minute_half_duty` (4000 ms lit instead of 3330) and `left_indicator_blinks` (on/off counts outside 18–22) |
 
 **Done-checklist**
 
-- [ ] `unit_tests` says 36/36 in WSL
-- [ ] I can read the `cluster_sim` diagram and point to each rule R1-R5, R10 in it
-- [ ] I wrote one script of my own and predicted the diagram before running it
-- [ ] I answered the questions above without notes
-- [ ] CI is green (the C jobs now also run `cluster_sim`)
-- [ ] Committed and tagged `m09-cluster-inputs`
+- [x] `unit_tests` says 36/36 in WSL
+- [x] CI is green
+- [x] Committed and tagged `m09-cluster-inputs`
+
 
 ## M10 · Cluster core: ECU and nav supervision
 
-**My plan (write before reading on_engine):**
+**Explain it:**
 
--
+- **`--` instead of the last value (R13):** a frozen value looks valid, and the driver can't tell.
+  If the ECU dies at 50 km/h while you speed up to 90, the gauge says 50. `--` clearly says
+  "unknown".
+- **A rejected frame doesn't refresh `ecu_last_ms`:** otherwise a stream of corrupt frames would
+  count as "ECU alive", and the gauges would freeze on the last good value. That is exactly the
+  stale value R13 forbids.
+- **What the alive counter catches here:** the ECU software hangs, but its CAN controller keeps
+  sending the last frame from its buffer. The CRC is valid and the values are frozen. Only the
+  repeating counter shows it (REPEATED).
+- **Range and rate:** range catches a *steady* garbage value (12000 rpm every frame passes the rate
+  check). Rate catches a *jump* that is still in range (50 → 150 km/h in one frame).
+- **Rate limit × `last_delta`:** if frames were lost, more time has passed and the car can
+  legitimately change more. Without the scaling, a lost frame during hard acceleration would cause
+  a false rejection.
+- **Re-anchor:** after a rejection the next frame is the new starting point, with no rate check.
+  A spike that is gone in the next frame (back to 50) never shows. A real change that stays (150)
+  shows one frame later. Otherwise, after a real step the core would reject forever. Trade-off:
+  a garbage value repeated twice gets through the rate check (range still guards).
+- **3 good frames (R8):** on a marginal bus, one good frame is often followed by more bad ones, and
+  the gauge would flicker between `--` and a value. 3 in a row (60 ms) shows the link is stable.
+  This is hysteresis.
+- **500 ms start-up grace, lamp off while syncing:** at key-on the ECUs boot at different speeds,
+  and a red lamp at every start trains drivers to ignore it. "Not valid yet" isn't "lost", so the
+  lamp stays off during the first sync (the M10 fix).
+- **CHECK ENGINE off when the ECU is lost:** the lamp means "the ECU reports a fault". Without a
+  trusted ECU we can't claim that either way, so keeping it would be stale. ECU DATA red now
+  carries the warning.
+- **Heading for DEGRADED, not for UNAVAILABLE:** degraded = still usable, less accurate (amber, σ
+  reported). Unavailable = the filter itself says "don't trust me", so showing it would mislead.
+- **300 ms nav, 100 ms ECU:** both are a few missed frames. ECU every 20 ms → 5 frames. Nav at
+  10 Hz → 3 frames. 100 ms for nav would raise an alarm on a single late frame.
 
-**What I learned / differences from the reference:**
+**Experiment results:**
 
--
+| Experiment | Result |
+|---|---|
+| ECU gap 80 ms | **no `--`**: last good 0.98 s, next 1.08 s = exactly 100 ms, not > 100 |
+| ECU gap 120 ms | `--` and ECU DATA red from 1.10 to 1.20 s |
+| speed 60 → 70 → 80 → 95 | +10 passes (the limit is "> 10"). +15 (80 → 95) is **rejected** (rate 1), re-anchored, and 95 shows one frame later (1.10 s) |
+| CHECK ENGINE + corrupt | ON at 1.00, **off** with the ECU at 1.60 (ECU DATA red), ON again at 2.10 after recovery |
+| nav aligning → degraded → nominal | amber, heading `--` → amber, heading 90 → no lamp, heading 90 |
+| `ECU_RECOVER_FRAMES 1` | only `ecu_start_up_has_no_false_fault` fails. The demo recovers 50 ms earlier each time (1.30 vs 1.35 s, 2.50 vs 2.55 s, 3.65 vs 3.70 s). **The R8 test didn't catch it**: after a timeout the E2E resync already delays recovery, which hid the change |
+| remove the `E2E_INITIAL` line | only `ecu_start_up_has_no_false_fault` fails: unconfirmed INITIAL frames count toward the 3 good frames, so values appear before the sequence is confirmed |
 
-**Explain it (answer out loud, then write one line each):**
-
-- R13 says "never stale". Why is `--` safer than showing the last good speed for a few seconds?
-- Why does a rejected frame not refresh `ecu_last_ms`? What would happen with a corrupt stream if it did?
-- What does the alive counter catch that the CRC can't, in the ECU case? Describe the real fault.
-- Why both a range check and a rate check? Give a value each one catches that the other misses.
-- Why is the rate limit multiplied by `last_delta` (the number of frames since the last good one)?
-- After a rate rejection the core re-anchors. Why does a real jump (150 km/h that stays) get
-  accepted one frame later, while a single spike never shows?
-- Why 3 good frames after a fault (R8) instead of the first good one?
-- Why the 500 ms start-up grace, and why is the ECU DATA lamp off while the first frames sync?
-- CHECK ENGINE only from a valid frame (R9). Why turn it *off* when the ECU is lost, instead of
-  keeping the last state?
-- Nav: why is the heading hidden for UNAVAILABLE but shown for DEGRADED?
-- The nav timeout is 300 ms and the ECU timeout 100 ms. Why different?
-
-**Experiments (predict first, then run):**
-
-- `cluster_sim 0:- 1000:ecu=off 1080:ecu=ok 2000:-`: an 80 ms gap. Does the gauge go to `--`? Then 120 ms.
-- `cluster_sim 0:- 1000:speed=60 1020:speed=70 1040:speed=80 1060:speed=95 2000:-`: which steps pass the rate check?
-- `cluster_sim 0:- 1000:mil=1 1500:ecu=corrupt 2000:ecu=ok 2500:-`: what does CHECK ENGINE do, and when?
-- `cluster_sim 0:- 1000:nav=aligning 1500:nav=degraded 2000:nav=nominal 2500:-`: lamp and heading each time?
-- Set `ECU_RECOVER_FRAMES` to 1. Which test fails? Run the demo: what changes after each fault? Undo.
-- Remove the `if (s == E2E_INITIAL) ...` line in `on_engine`. Which tests fail, and why? Undo.
+**Takeaway:** a test that passes can still be a weak test. Breaking the code on purpose
+(mutation testing) shows which rules are really guarded. Added
+`ecu_needs_three_good_frames_after_a_freeze` (R8 measured inside the core: 80 ms with 3 frames,
+40 ms with 1 frame, so the test fails with 1).
 
 **Done-checklist**
 
-- [ ] `unit_tests` says 49/49 in WSL
+- [x] `unit_tests` says 49/49 in WSL (50/50 with the new test)
 - [ ] I can point to every line of "what happened" in the demo and name the rule
 - [ ] I wrote one fault script of my own and predicted the result before running it
 - [ ] I answered the questions above without notes
-- [ ] CI is green (all 8 jobs, including Windows)
-- [ ] Committed and tagged `m10-cluster-supervision`
+- [x] CI is green (all 8 jobs, including Windows)
+- [x] Committed and tagged `m10-cluster-supervision`
