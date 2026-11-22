@@ -86,7 +86,7 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja diffutils
       - run: cmake -S target -B target/build -G Ninja
       - run: cmake --build target/build
       - run: ./target/build/unit_tests.exe
