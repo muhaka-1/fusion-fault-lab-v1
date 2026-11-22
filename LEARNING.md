@@ -657,3 +657,47 @@ no CRC could detect. Real cars meet this when an ECU is swapped or flashed with 
 - [x] cluster_core, display_term and busctl bench run in three windows, and I drove the car
 - [x] CI is green, including the new system-test step
 - [x] Committed and tagged `m11-bus-processes
+## M12 · The EKF in C, parity with Python
+
+**My plan (write before reading ekf.c):**
+
+-
+
+**What I learned / differences from the reference:**
+
+-
+
+**Explain it (answer out loud, then write one line each):**
+
+- Why design the filter in Python first and port it, instead of writing it in C from the start?
+- Why is the parity limit 1 µm for position but 1e-9 for heading? Why not demand exactly 0?
+- The measured difference is ~1e-12 m, not 0. Where does it come from, if the maths is the same?
+- Why does `replay_input` write numbers with `repr()`? What would `f"{x:.6f}"` do to the parity?
+- `ekf_wrap` has an extra line compared to a plain `fmod`. Why? Give an angle where they differ.
+- Python uses `scipy.stats.chi2.ppf`. What does `chi2.c` do instead, and how is it checked?
+- Why compare the accept/reject decision on every GNSS fix, not only the final position error?
+- Why compare the status on every step? Which bug would a final-value check miss?
+- Why must C and Python sum the monitor window oldest-first? (look at `monitor_on_update`)
+- The C filter uses no `malloc`. Why does that matter on the car (and on QNX)?
+- C was about 10 × faster in `plot_m12.py`. Is that why we port it? What are the real reasons?
+
+**Experiments (predict first, then run):**
+
+- In `ekf.c`, change the default `sigma_gnss` from 1.5 to 1.4 (C only) and rebuild. Which parity
+  checks fail first, and for which scenarios? Undo.
+- Replace the Joseph-form covariance update with the short form `P = (I - K H) P`. Does parity
+  still hold? How big is the difference now? Undo.
+- In `nav_replay.c`, do the GNSS update *before* the wheel update. Predict: does the parity test notice? Undo.
+- In `ekf_wrap`, remove the `if (r != 0.0 && r < 0.0) r += w;` line. Which unit test fails?
+  Does the parity test fail too? Why or why not? Undo.
+- `python3 scripts/plot_m12.py --scenario gnss_drift` and `--scenario wheel_scale`: is the
+  difference always below 1e-11? Where in time does it grow, and why there?
+
+**Done-checklist**
+
+- [ ] `unit_tests` says 61/61, and `test_parity.py` passes (12) in WSL
+- [ ] I ran `plot_m12.py` and can explain both panels
+- [ ] I broke parity on purpose at least once and saw which check caught it
+- [ ] I answered the questions above without notes
+- [ ] CI is green, including the parity step
+- [ ] Committed and tagged `m12-ekf-in-c`

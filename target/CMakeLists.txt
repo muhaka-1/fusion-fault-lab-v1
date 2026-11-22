@@ -4,6 +4,7 @@
 #   M9: cluster core, input rules R1-R5 and R10 (cluster_core.c), cluster_sim (timing diagram)
 #   M10: ECU and nav supervision R6-R9, R11-R13
 #   M11: the bus (UDP multicast), cluster_core and display_term as separate processes
+#   M12: the EKF, chi-square gate and fault monitor in C (fc_nav), nav_replay for the parity test
 cmake_minimum_required(VERSION 3.16)
 project(fusion_target C)
 
@@ -30,17 +31,23 @@ target_link_libraries(fc_common m)          # lround, fmod
 add_library(fc_core STATIC src/core/cluster_core.c)
 target_link_libraries(fc_core fc_common)
 
+add_library(fc_nav STATIC src/nav/ekf.c src/nav/chi2.c src/nav/monitor.c)
+target_link_libraries(fc_nav fc_common)
+
 add_executable(e2e_demo tools/e2e_demo.c)
 target_link_libraries(e2e_demo fc_common)
 
 add_executable(can_vectors tools/can_vectors.c)
 target_link_libraries(can_vectors fc_common)
 
+add_executable(nav_replay tools/nav_replay.c)
+target_link_libraries(nav_replay fc_nav)
+
 add_executable(cluster_sim tools/cluster_sim.c)
 target_link_libraries(cluster_sim fc_core)
 
-add_executable(unit_tests tests/test_main.c tests/test_e2e.c tests/test_msg.c tests/test_core.c)
-target_link_libraries(unit_tests fc_core)
+add_executable(unit_tests tests/test_main.c tests/test_e2e.c tests/test_msg.c tests/test_core.c tests/test_nav.c)
+target_link_libraries(unit_tests fc_core fc_nav)
 
 # M11: everything that needs sockets and a monotonic clock (Linux, WSL, QNX; not MinGW)
 if(NOT WIN32)

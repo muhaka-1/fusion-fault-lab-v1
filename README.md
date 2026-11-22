@@ -18,7 +18,8 @@ module at a time; each module ends in tests that pass.
 | M9 · Cluster core: inputs | done |
 | M10 · Cluster core: ECU and nav supervision | done |
 | M11 · Bus and processes | done |
-| M12 · EKF in C, parity with Python | next |
+| M12 · EKF in C, parity with Python | done |
+| M13 · Nav node on the bus | next |
 
 ## M1 · Simulator
 
@@ -352,3 +353,35 @@ python3 -m pytest -q tests/test_system.py tests/test_can_contract.py
 ./target/build/display_term                                 # 2: the cluster
 PYTHONPATH=src python3 -m fusionlab.busctl bench            # 3: you are the car
 ```
+
+## M12 · The EKF in C, and proof that it is the same filter
+
+Phase 1 designed the filter in Python. The car runs C, so M12 ports it: `target/src/nav/`
+`ekf.c` (state, predict, GNSS and wheel updates, gating, lock-out recovery), `chi2.c` (the
+chi-square gate thresholds, replacing scipy) and `monitor.c` (windowed NIS alarm and status).
+
+A port is only useful if it is provably the same filter. **The parity test**
+(`tests/test_parity.py`) feeds identical sensor samples to both, for every fault scenario with
+gating on and off, 12 001 steps each, and requires:
+
+| | limit | measured |
+|---|---|---|
+| position x, y | 1 µm | ~1e-12 m |
+| heading, speed, gyro bias | 1e-9 | ~1e-14 |
+| status (NOMINAL / DEGRADED / UNAVAILABLE) | identical every step | identical |
+| GNSS accept / reject | identical on every fix | identical |
+| number of recoveries | identical | identical |
+
+The C side runs through `target/tools/nav_replay.c`: CSV of sensor samples in, estimates out.
+The input is written with `repr()`, so every bit of every double reaches C unchanged.
+
+```bash
+# WSL (the parity test needs numpy and scipy there too)
+sudo apt install -y python3-numpy python3-scipy python3-matplotlib
+cmake -S target -B target/build -DSANITIZE=ON && cmake --build target/build
+./target/build/unit_tests                          # 61/61 tests passed
+python3 -m pytest -q tests/test_parity.py          # 12 passed
+python3 scripts/plot_m12.py                        # docs/m12_parity.png, plus the speed of each
+```
+
+![C and Python filter on the same data](docs/m12_parity.png)
