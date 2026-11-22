@@ -422,44 +422,66 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 
 ## M8 · CAN messages in C and Python
 
-**My plan (write before reading can_msg.c):**
+**Explain it:**
 
--
+- **Scaled integers instead of floats:** fixed size and exact bytes on every CPU. A float32 would use
+  4 of the 6 free bytes and a double needs all 8. Small controllers often have no float hardware.
+  Cost: fixed resolution and range. 12.345 m/s goes out as 1235 → 12.35 (±half a step), and
+  anything above 655.34 m/s can't be sent.
+- **IMU yaw rate, int24 × 1e-6 rad/s:** resolution 0.000001 rad/s, range ±8.39 rad/s (±480 °/s).
+  A car turns at most about 1 rad/s, and the 0.004 rad/s gyro bias is 4000 steps, so it is plenty.
+  (Accel: 1e-5 m/s², ±83.9 m/s² ≈ ±8.5 g.)
+- **Saturate, don't wrap:** a wrapped 700 m/s would become 70000 mod 65536 = 4464 → 44.64 m/s, which
+  looks perfectly plausible and the EKF would believe it. Saturated it becomes 655.34, which is
+  clearly at the limit. -3 m/s becomes 0 instead of wrapping to 652 m/s.
+- **Little endian in the spec:** the bytes on the wire are a contract between two programs, not a
+  property of a CPU. If one side writes big endian, every 16- and 24-bit value is read wrong, while
+  the CRC is still valid, because the sender computed it over the wrong bytes. The code builds
+  bytes with shifts, so it doesn't depend on the CPU. (Many real car DBC files use big endian,
+  "Motorola" order, so always check.)
+- **`get_i24` and negative numbers:** it builds the 24-bit value from 3 bytes. If bit 23 (the sign
+  bit) is set, it fills the top 8 bits with ones (sign extension), then reads it as int32.
+  Example: NAV_POSE y = `17 f8 ff` → 0xFFF817 → 0xFFFFF817 = -2025 → -20.25 m.
+- **0xFFFF = "no valid value":** a marker must be a value real data can never have. 0 is a real
+  speed, so the top value is used. The encoders cap real values at 65534, so 0xFFFF only ever
+  means "--". The display then shows dashes instead of a stale or made-up number.
+- **GNSS "fix valid" flag:** (0, 0) is a real position: the car starts there in our local frame.
+  A marker inside the data range is ambiguous. A separate flag tells the filter to skip the update.
+- **`_lround`, not `round()`:** Python rounds halves to even, so round(12.5) = 12. C's lround gives
+  13. A wheel speed of 12.345 m/s is 1234.5 steps: C sends 1235 (`d3 04`), Python with round()
+  sends 1234 (`d2 04`). Different bytes, different CRC.
+- **Why commit `can_vectors.txt`:**
+  - Python can be tested anywhere without a C compiler (Git Bash, the Windows CI runner).
+  - A format change shows up as a diff in review.
+  - Most important, roundtrip tests can't catch a consistent mistake. Switching both put_u16 and
+    get_u16 to big endian still passes 20/20. Only the frozen reference bytes catch it.
+- **Flags in byte 1, high nibble:** byte 0 is the CRC, byte 1 low nibble is the alive counter, and
+  the 4 high bits were free, so flags cost no data bytes. They are inside the CRC (bytes 1–7), and
+  `e2e_protect` only touches the low nibble (`(p[1] & 0xF0) | counter`).
 
-**What I learned / differences from the reference:**
+**Experiment results:**
 
--
+| Experiment | Prediction | Result |
+|---|---|---|
+| decode `0x110 a70ed304…` | | 0x04D3 = 1235 → **12.35 m/s**, CRC valid |
+| change `d3 04` → `d3 05` | BAD_CRC | **BAD_CRC**, but the decoder still prints 14.91 m/s: check E2E *before* decoding |
+| `_lround` → `round` in `_sat` | | `test_encoders_match_c` fails at **wheel** (12.345 → 1234.5, an exact half). IMU and GNSS pass: their values had no exact .5 |
+| `put_u16` big endian | many fail | **15/20 pass.** Fail: wheel_and_engine, nav_state, nav_cmd_and_diag, cluster_frames, encode_protect_check_decode (all use u16). Pass: the 10 E2E tests, plus IMU, GNSS, NAV_POSE (24-bit) and the id test |
+| … then `can_vectors \| diff` | differs | 7 of 12 lines differ: wheel, engine, nav_state, nav_diag, nav_cmd, cluster_a, cluster_b |
+| (bonus) swap `get_u16` too | | **20/20 pass**, and only the `diff` catches it |
+| wheel 700 m/s, -3 m/s | saturate | `fe ff` → **655.34** (65534, never 0xFFFF) and `00 00` → **0.0** |
+| NAV_STATE heading -10° | 350 | **350.00°** (`b8 88` = 35000 = 350.00°): wrapped into 0…360 by fmod + 360 |
 
-**Explain it (answer out loud, then write one line each):**
+**Takeaways:**
 
-- Why send scaled integers (speed in 0.01 m/s as u16) instead of floats? What does the scale cost you?
-- What is the resolution and the range of IMU yaw rate (int24, 1e-6 rad/s)? Is that enough for a car?
-- Why saturate out-of-range values instead of letting them wrap? What would a wrapped wheel speed do to the EKF?
-- Why is "little endian" written in the spec? What breaks if one side uses big endian?
-- How does `get_i24` turn 3 bytes back into a negative number?
-- Why does `0xFFFF` mean "no valid value" in CLUSTER_A, and why is the largest real speed 65534?
-- Why does the GNSS message have a "fix valid" flag instead of sending x = 0, y = 0?
-- Why must Python use `_lround` and not `round()`? Give a value where they differ.
-- Why is `tests/can_vectors.txt` committed, instead of running C from the Python test every time?
-- The flags go in the high nibble of byte 1. Why there, and what else lives in byte 1?
-
-**Experiments (predict first, then run):**
-
-- `python -m fusionlab.canbus 0x110 a70ed30400000000`: what speed is it? Change one data byte (keep
-  the CRC): what does the E2E check say now?
-- In `canbus.py`, replace `_lround` with Python's `round` in `_sat`. Which contract test fails, and
-  for which message? Undo afterwards.
-- In `can_msg.c`, swap the two bytes in `put_u16` (big endian). Rebuild: which C tests still pass,
-  and why? Then run `can_vectors | diff - tests/can_vectors.txt`. Undo afterwards.
-- Encode a wheel speed of 700 m/s and of -3 m/s (Python or C). What comes out, and why?
-- Encode heading -10° in NAV_STATE. What does the decoder give back?
+- A decoder turns any bytes into numbers, even corrupted ones. The rule in every receiver is
+  `e2e_check` → only if usable → decode.
+- Roundtrip tests prove that encode and decode agree with each other, not that they agree with the
+  spec. Golden vectors prove the bytes.
 
 **Done-checklist**
 
-- [ ] `unit_tests` says 20/20 in WSL
-- [ ] `can_vectors | diff - tests/can_vectors.txt` prints nothing
-- [ ] `python -m pytest -q` passes in Git Bash (the C-output test may be skipped there)
-- [ ] I can decode one frame by hand: id, CRC, counter, flags, every signal
-- [ ] I answered the questions above without notes
-- [ ] CI is green, including the new reference-frame step
-- [ ] Committed and tagged `m08-can-messages`
+- [x] `unit_tests` says 20/20 in WSL
+- [x] `can_vectors | diff - tests/can_vectors.txt` prints nothing
+- [x] `python -m pytest -q` passes in Git Bash (73 passed, 1 skipped)
+- [x] Committed and tagged `m08-can-messages`
