@@ -657,47 +657,75 @@ no CRC could detect. Real cars meet this when an ECU is swapped or flashed with 
 - [x] cluster_core, display_term and busctl bench run in three windows, and I drove the car
 - [x] CI is green, including the new system-test step
 - [x] Committed and tagged `m11-bus-processes
+
 ## M12 · The EKF in C, parity with Python
 
-**My plan (write before reading ekf.c):**
+**Explain it:**
 
--
+- **Python first, then port:** in Python, design mistakes (gating, lock-out, recovery) are cheap
+  to find: plot, change a line, rerun. Once the design is right, the Python filter becomes the
+  *reference*, the "correct answer" the C port is checked against. Writing C first would mean
+  debugging the design and the C code at the same time.
+- **1 µm for position, 1e-9 for heading, not exactly 0:** positions are ~1000 m and a double holds
+  ~16 digits, so rounding starts near 1e-13 m and adds up over 12 001 steps. 1 µm is still far
+  below anything physical. Heading is ~1 rad, so 1e-9 is the same *relative* margin. Exactly 0
+  would force C to do every addition in numpy's exact order (BLAS, fused multiply-add). Any change
+  of compiler or library would then "break" a correct filter.
+- **Where ~1e-12 comes from:** numpy's matrix products (BLAS) add up in a different order, and
+  sometimes with fused multiply-add, compared to C's simple loops. Each step differs in the last
+  digit (~1e-16 relative). The filter feeds its own state back, so those differences add up like a
+  random walk. Recoveries (P × 625) amplify them.
+- **`repr()` in `replay_input`:** `repr` prints the shortest text that turns back into *exactly* the
+  same double. With `f"{x:.6f}"` every input would be rounded to 1e-6: gyro errors of 5e-7 rad/s,
+  GNSS errors of 0.5 µm. The C filter would then run on *different data*, and a borderline gate
+  decision could flip.
+- **The extra line in `ekf_wrap`:** C's `fmod` keeps the sign of the number being divided. Python's
+  `%` takes the sign of the divisor. For angles below -π, `fmod(a + π, 2π)` is negative, so 2π must
+  be added. Example: a = -π - 0.1. Python gives π - 0.1 = 3.04, plain `fmod` gives -3.24 (not
+  wrapped at all).
+- **`chi2.c` instead of scipy:** it computes the chi-square CDF itself (the regularized incomplete
+  gamma function: a series or a continued fraction) and inverts it by bisection. For 2 dof there
+  is a closed form. Checked two ways: `chi2_matches_scipy` compares against scipy's values to
+  1e-9, and parity requires the same accept/reject on every fix.
+- **Compare every accept/reject decision:** the gate is a yes/no step. A tiny numeric difference
+  near the threshold can flip one decision. A final-error check could miss that if the flip had a
+  small effect or was cancelled out later. The decisions are the logic, so compare the logic.
+- **Compare the status on every step:** a bug like a wrong window length, the wrong dof for the
+  window threshold, or an off-by-one in the GNSS timeout only shows *during* a fault. At 120 s both
+  filters may say NOMINAL again.
+- **Oldest-first sum in the monitor:** floating-point addition isn't associative: (a+b)+c can differ
+  from a+(b+c) in the last bit. Python sums the deque oldest-first, so C must too, or a sum right at
+  the alarm threshold could fall on different sides.
+- **No `malloc`:** every size is fixed at compile time (`EKF_N`, `MON_MAX_WINDOW`), so the memory
+  use is known, an allocation can never fail or fragment at runtime, and timing is predictable.
+  Safety rules for car software (MISRA C) forbid dynamic memory, and real-time systems like QNX
+  expect it. (`grep malloc target/src` finds nothing.)
+- **C was ~6–10× faster, but that's not why we port:** Python already processes 120 s of data in
+  0.4 s (300× real time). The real reasons: the target (QNX on the Pi) has no Python; C has no
+  garbage collector, so timing is predictable; memory is fixed; and it can be checked with car
+  tools (MISRA, static analysis), next to the other C nodes on the bus.
 
-**What I learned / differences from the reference:**
+**Experiment results** (12 runs each: 6 scenarios × gating on/off):
 
--
+| Experiment | Result |
+|---|---|
+| baseline | all 12 pass. Largest difference **2.5e-12 m** (gnss_drift with 3 recoveries) |
+| `sigma_gnss` 1.5 → 1.4, C only | **all 12 fail at t = 0.20 s, the first GNSS fix.** Worst: gnss_drift with gating, 36 m apart, status differs on 1276 steps, 20 different GNSS decisions. **The C unit tests still say 61/61**: none of them checks the default noise values |
+| Joseph form → short form `P = (I-KH)P` | **still passes**: at most 1.3e-9 m (gnss_drift, after recoveries), otherwise ~1e-12. With the optimal gain both forms are the same maths. The Joseph form is about *numerical safety* (P stays symmetric and positive) when P is badly conditioned or in float. Parity at double precision can't see that |
+| GNSS update before wheel update in `nav_replay` | passes **10 of 12**. Fails only gnss_drift and gyro_bias_step *with gating*, starting at **57.8 s** and **67.6 s**: the recovery moments. Without recovery the two updates commute (same result in either order). The ×25 inflation inside the GNSS update doesn't commute, so the update order is part of the spec |
+| remove the sign fix in `ekf_wrap` | **unit test `wrap_matches_python_modulo` fails, parity passes all 12.** The test drive never takes the heading below -π, so the bug never runs |
+| `plot_m12.py --scenario gnss_drift` / `wheel_scale` | max **2.5e-12 m** / **5.7e-13 m**, always below 1e-11. The difference jumps at recoveries (bigger P → bigger gains → rounding amplified) and moves in small steps at GNSS updates |
 
-**Explain it (answer out loud, then write one line each):**
+**Takeaways:**
 
-- Why design the filter in Python first and port it, instead of writing it in C from the start?
-- Why is the parity limit 1 µm for position but 1e-9 for heading? Why not demand exactly 0?
-- The measured difference is ~1e-12 m, not 0. Where does it come from, if the maths is the same?
-- Why does `replay_input` write numbers with `repr()`? What would `f"{x:.6f}"` do to the parity?
-- `ekf_wrap` has an extra line compared to a plain `fmod`. Why? Give an angle where they differ.
-- Python uses `scipy.stats.chi2.ppf`. What does `chi2.c` do instead, and how is it checked?
-- Why compare the accept/reject decision on every GNSS fix, not only the final position error?
-- Why compare the status on every step? Which bug would a final-value check miss?
-- Why must C and Python sum the monitor window oldest-first? (look at `monitor_on_update`)
-- The C filter uses no `malloc`. Why does that matter on the car (and on QNX)?
-- C was about 10 × faster in `plot_m12.py`. Is that why we port it? What are the real reasons?
-
-**Experiments (predict first, then run):**
-
-- In `ekf.c`, change the default `sigma_gnss` from 1.5 to 1.4 (C only) and rebuild. Which parity
-  checks fail first, and for which scenarios? Undo.
-- Replace the Joseph-form covariance update with the short form `P = (I - K H) P`. Does parity
-  still hold? How big is the difference now? Undo.
-- In `nav_replay.c`, do the GNSS update *before* the wheel update. Predict: does the parity test notice? Undo.
-- In `ekf_wrap`, remove the `if (r != 0.0 && r < 0.0) r += w;` line. Which unit test fails?
-  Does the parity test fail too? Why or why not? Undo.
-- `python3 scripts/plot_m12.py --scenario gnss_drift` and `--scenario wheel_scale`: is the
-  difference always below 1e-11? Where in time does it grow, and why there?
+- Unit tests check edge cases on purpose (angles below -π) but miss behaviour (a changed default).
+  Parity checks behaviour over real data but only on the paths the data takes. You need both.
+- A parity test proves "same as the reference", not "correct". If Python had the bug, C would have
+  it too.
 
 **Done-checklist**
 
-- [ ] `unit_tests` says 61/61, and `test_parity.py` passes (12) in WSL
-- [ ] I ran `plot_m12.py` and can explain both panels
-- [ ] I broke parity on purpose at least once and saw which check caught it
-- [ ] I answered the questions above without notes
-- [ ] CI is green, including the parity step
-- [ ] Committed and tagged `m12-ekf-in-c`
+- [x] `unit_tests` says 61/61, and `test_parity.py` passes (12) in WSL
+- [x] I ran `plot_m12.py` and can explain both panels
+- [x] CI is green, including the parity step
+- [x] Committed and tagged `m12-ekf-in-c`
