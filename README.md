@@ -15,7 +15,8 @@ module at a time; each module ends in tests that pass.
 | M6 · Lock-out recovery and the benchmark | done |
 | M7 · C build, test framework, E2E protection | done |
 | M8 · CAN messages in C and Python | done |
-| M9 · Cluster core: inputs | next |
+| M9 · Cluster core: inputs | done |
+| M10 · Cluster core: ECU and nav supervision | next |
 
 ## M1 · Simulator
 
@@ -244,3 +245,36 @@ python -m pytest -q tests/test_can_contract.py  # 6 tests (1 skipped if C is not
 python -m fusionlab.canbus                      # decode every reference frame
 python -m fusionlab.canbus 0x200 d437800d39300000
 ```
+
+## M9 · Cluster core: inputs
+
+The cluster core (`target/src/core/cluster_core.c`) is the only component that decides what the
+instrument cluster shows. M9 builds its input side: the stalks and switches arrive as raw levels
+from an input board in the INPUTS message (0x210, every 10 ms), and the core turns them into lamps.
+
+| Rule | What | Test |
+|---|---|---|
+| R1 | every input must be stable for 3 samples (30 ms) before it counts | `debounce_*` |
+| R2 | hazard toggles on the debounced press, not while held; hazard overrides the stalk | `hazard_*` |
+| R3 | stalk left and right at once is implausible: no indicator | `both_stalk_contacts_is_implausible` |
+| R4 | indicators blink 90 times a minute, half on, half off, and start lit | `blink_*`, `*indicator*` |
+| R5 | main-beam lamp only with dipped beam on, or while flash is held | `beam_logic` |
+| R10 | no usable INPUTS frame for 100 ms: INPUT FAULT, all input lamps off | `input_board_loss_*`, `corrupted_input_*` |
+
+All rules: [docs/cluster_rules.md](docs/cluster_rules.md). Gauges and heading stay `--` until M10
+brings the ECU and nav data.
+
+**Time is a parameter.** The core never reads a clock: every call gets `now_ms`. The tests use a
+fake bench with its own clock, so 4 seconds of blinking run in microseconds and give the same
+result every time.
+
+```bash
+# WSL
+cmake -S target -B target/build -DSANITIZE=ON && cmake --build target/build
+./target/build/unit_tests                       # 36/36 tests passed
+./target/build/cluster_sim                      # timing diagram of the built-in demo
+./target/build/cluster_sim 0:- 200:L 2000:-     # your own script: TIME_MS:SWITCHES
+```
+
+`cluster_sim` switches: `L` left, `R` right, `H` hazard, `D` dipped, `M` main beam, `F` flash,
+`-` nothing, `X` the input board goes silent, `~` prefix: the contacts bounce for 20 ms.

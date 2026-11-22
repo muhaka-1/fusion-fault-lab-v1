@@ -8,6 +8,7 @@ int main(void)
 {
     suite_e2e();
     suite_msg();
+    suite_core();
     printf("%d/%d tests passed (%d checks)\n", t_run - t_fail, t_run, t_checks);
     return t_fail ? 1 : 0;
 }

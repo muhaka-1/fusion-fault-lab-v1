@@ -485,3 +485,48 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 - [x] `can_vectors | diff - tests/can_vectors.txt` prints nothing
 - [x] `python -m pytest -q` passes in Git Bash (73 passed, 1 skipped)
 - [x] Committed and tagged `m08-can-messages`
+## M9 · Cluster core: inputs
+
+**My plan (write before reading cluster_core.c):**
+
+-
+
+**What I learned / differences from the reference:**
+
+-
+
+**Explain it (answer out loud, then write one line each):**
+
+- Why debounce by counting samples instead of waiting a fixed time after the first change?
+- Why does one agreeing sample reset the counter in `debounce_step`? What would bounce do without it?
+- Why does the hazard toggle on the *rising edge* of the debounced level, not on the level itself?
+- Why is "left and right at once" treated as no indicator instead of picking one side?
+- Why must the indicator start lit, and why restart the phase when the side changes?
+- 90 blinks a minute gives a period of 667 ms. Where does `blink_lit` get its time from, and why
+  is the core not allowed to read the clock itself?
+- After an input fault (R10), why reset the debouncer and the hazard state instead of continuing?
+- Why does a corrupted INPUTS frame not refresh the timeout, even though a frame did arrive?
+- Why does `core_tick` restart its 50 ms grid after a stall instead of sending the missed frames?
+- The gauges show `--` in M9. Which rule says so, and why not show 0?
+
+**Experiments (predict first, then run):**
+
+- `cluster_sim 0:- 200:L 3000:-`: count the columns of one blink. Do you get 90 per minute?
+- `cluster_sim 0:- 200:~L 1000:- 1200:L 1220:- 1240:L 1260:- 2000:-`: which presses light the
+  indicator, and why does the 20 ms tap pattern never get through?
+- `cluster_sim 0:- 200:H 300:- 1000:H 1050:- 2000:-`: is the second press (50 ms) long enough?
+  Try 20 ms instead.
+- `cluster_sim 0:- 200:D 600:DX 650:D 1500:-`: why is there no INPUT FAULT for a 50 ms gap? How
+  long must the gap be?
+- Set `DEBOUNCE_SAMPLES` to 1 in `cluster_core.h` and rebuild. Which tests fail? Then run
+  `cluster_sim 0:- 200:~R 1500:-`. Undo afterwards.
+- Change `BLINK_ON_MS` to 400. Which test catches it?
+
+**Done-checklist**
+
+- [ ] `unit_tests` says 36/36 in WSL
+- [ ] I can read the `cluster_sim` diagram and point to each rule R1-R5, R10 in it
+- [ ] I wrote one script of my own and predicted the diagram before running it
+- [ ] I answered the questions above without notes
+- [ ] CI is green (the C jobs now also run `cluster_sim`)
+- [ ] Committed and tagged `m09-cluster-inputs`

@@ -67,8 +67,10 @@ jobs:
         run: cmake --build target/build -j
       - name: Unit tests
         run: ./target/build/unit_tests
-      - name: Demo
-        run: ./target/build/e2e_demo
+      - name: Demos
+        run: |
+          ./target/build/e2e_demo
+          ./target/build/cluster_sim
       - name: C still prints the committed reference frames (M8)
         run: ./target/build/can_vectors | diff - tests/can_vectors.txt
 

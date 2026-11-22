@@ -23,4 +23,5 @@ extern int t_cur_fail;
 
 void suite_e2e(void);   /* M7 */
 void suite_msg(void);   /* M8 */
+void suite_core(void);  /* M9, M10 */
 #endif
