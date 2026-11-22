@@ -591,54 +591,69 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 **Done-checklist**
 
 - [x] `unit_tests` says 49/49 in WSL (50/50 with the new test)
-- [ ] I can point to every line of "what happened" in the demo and name the rule
-- [ ] I wrote one fault script of my own and predicted the result before running it
-- [ ] I answered the questions above without notes
 - [x] CI is green (all 8 jobs, including Windows)
 - [x] Committed and tagged `m10-cluster-supervision`
+
 ## M11 · The bus and separate processes
 
-**My plan (write before reading canbus_udp.c and core_main.c):**
+**Explain it:**
 
--
+- **Why multicast:** every node sees every frame, like on a real CAN bus. A sender doesn't need to
+  know who listens, so adding a monitor or a display changes nothing in the senders. Plain UDP to one
+  address is one-to-one: every new listener needs a change in the sender. TCP adds connections and
+  retransmission, so a lost frame arrives late and holds up the ones behind it. For real-time data,
+  late is worse than lost: the E2E counter already detects loss, and the next frame comes 10 ms later.
+- **TTL 1 and 127.0.0.1:** the frames stay on this machine. TTL 1 means no router passes them on.
+  With a bigger TTL on a real network, frames could reach other machines: two benches on the same
+  group and port would mix their frames (the "two benches" experiment, below).
+- **canbus_wire.c vs canbus_udp.c:** turning a frame into 16 bytes is pure data and portable, so it
+  is tested everywhere, Windows included. Sockets are POSIX only. For real hardware only
+  `canbus_udp.c` changes (SocketCAN on Linux, `dev-can-*` on QNX); everything above it just calls
+  `canbus_open/send/recv`.
+- **Why `canbus_unpack` rejects odd datagrams:** a classic CAN frame has an 11-bit id and at most
+  8 data bytes. Anything else (a short datagram, another program on the same port) isn't a CAN
+  frame. Rejecting it at the edge means no decoder ever sees impossible input.
+- **Wait for frames until the next tick, not sleep:** `canbus_recv` with "time left until the next
+  tick" as the timeout handles each frame the moment it arrives, with an accurate timestamp, and
+  the tick still runs on time. Sleeping 10 ms would leave frames waiting up to 10 ms and stamp them
+  late. Polling in a loop would burn a CPU core.
+- **CLOCK_MONOTONIC:** it only moves forward. The time of day can jump (NTP, daylight saving, the
+  user). A jump forward fires every timeout at once (ECU, INPUTS, nav faults). A jump backward
+  stops the timeouts from firing, so stale values stay on the gauges. That is the worst case.
+- **Far behind (more than 50 ms):** debugger, laptop suspend, overload. `next = now` skips the missed
+  ticks instead of running them back to back with old timestamps. Same idea as `core_tick` not
+  sending a burst.
+- **The display's one rule:** no valid frame from the core for 250 ms → NO SIGNAL FROM CORE. A
+  frozen picture shows old values that look live. If the core crashed at 50 km/h with no warnings,
+  the driver would keep seeing exactly that. R13, applied to the display itself.
+- **Draw nothing until both CLUSTER_A and CLUSTER_B are fresh:** otherwise half the picture would
+  come from zeroed defaults, e.g. positioning "OK" with heading 0. A zero isn't "unknown".
+- **What the system test adds over the unit tests:** real time across real processes (the 667 ms
+  blink, measured on the bus), the wire format and multicast actually working, E2E counters per
+  sender across process boundaries, and what happens when a process dies (the display blanks).
+  The unit tests run one process with a fake clock.
+- **Git Bash can't reach WSL on 127.0.0.1:** WSL 2 is a small virtual machine with its own network
+  stack. Its 127.0.0.1 is the VM's loopback, not Windows', so multicast on one doesn't reach the
+  other. (The C programs are also Linux binaries.) Run every part of the bus on the same side.
 
-**What I learned / differences from the reference:**
+**Experiment results:**
 
--
+| Experiment | Result |
+|---|---|
+| `left`, `ecu freeze`, `ecu ok` + `-v` log | `0x21` = LEFT (bit 0) + ECU DATA (bit 5), then `0x01` = LEFT only. The log prints only when a *non-blink* lamp changes, so `left` alone prints nothing. The `0x01` is the blink lamp caught lit at that moment |
+| monitor rates | INPUTS **100/s**, ENGINE **50/s**, NAV_STATE **10/s**, CLUSTER_A and CLUSTER_B **20/s** each: exactly the periods in can_messages.md. ENGINE "E2E bad 30" = 0.6 s of freeze ÷ 20 ms |
+| stop `cluster_core` | the bench noticed after **219 ms**. The display shows NO SIGNAL FROM CORE after up to 250 ms since the last good frame |
+| start it again | +66 ms: speed `--` (ECU still syncing, R8), dipped already on, POSITIONING red (no usable nav frame yet). +112 ms: 50 km/h. +214 ms: positioning OK, heading 90 (nav sends only every 100 ms). ECU DATA never flashes red (the M10 fix) |
+| `dip on`, then `inputs off` / `on` | INPUTS fault and the dipped lamp **off**, although the switch is still on (R10: unknown, not stale). Back within 100 ms of `inputs on` |
+| two benches at once | ECU DATA, INPUTS and NAV DATA LOST all red: two alive counters on the same IDs. The receiver sees REPEATED / WRONG_SEQUENCE and rejects every stream. Close one bench and the cluster recovers |
+| system test while your programs run | no interference: the `rig` fixture picks a random port 44000–45999 and gives it to its own processes and bench, so it runs on its own private bus |
 
-**Explain it (answer out loud, then write one line each):**
-
-- Why multicast? What would change with plain UDP to one address, or with TCP?
-- Why is the TTL 1 and the interface 127.0.0.1? What could happen with a bigger TTL on a real network?
-- Why split `canbus_wire.c` from `canbus_udp.c`? What is the only file to replace for real CAN hardware?
-- Why does `canbus_unpack` reject datagrams that are not exactly 16 bytes, dlc > 8, or id > 0x7FF?
-- `core_main.c` waits for frames until the next 10 ms tick instead of sleeping. Why?
-- Why `CLOCK_MONOTONIC` and not the time of day? What happens to the core when NTP changes the clock?
-- What does `core_main.c` do when it is far behind (more than 50 ms), and why?
-- The display makes no decisions. What is its one rule, and why is a frozen picture dangerous?
-- Why does the display draw nothing until both CLUSTER_A and CLUSTER_B are fresh?
-- What does the system test check that the unit tests can't? Name two things.
-- Why can't Python in Git Bash talk to `cluster_core` in WSL on 127.0.0.1?
-
-**Experiments (predict first, then run):**
-
-- With all three running: `left`, then `ecu freeze`, then `ecu ok`. Watch `display_term` and the
-  `cluster_core -v` log. Which lamp bits change (`lamps 0x..`)? Decode them with `docs/can_messages.md`.
-- In a 4th window: `PYTHONPATH=src python3 -m fusionlab.busctl monitor`. What rates do you see for
-  each message? Do they match the periods in `docs/can_messages.md`?
-- Stop `cluster_core` with Ctrl+C while the display runs. How fast does it say NO SIGNAL FROM CORE?
-  Start it again: what does the cluster show in the first 100 ms, and why?
-- `inputs off` while `dip on`: what happens to the dipped-beam lamp, and when you send `inputs on`?
-- Run two benches at once (two windows with `busctl bench`). What does the core see? Which rule
-  catches it? (hint: two senders, two alive counters on the same ID)
-- Run the system test with `CANBUS_PORT` unchanged while your three programs run. Why doesn't it
-  get confused by your bench? (look at the `rig` fixture)
+**Takeaway:** the alive counter also catches a *configuration* fault, two senders on one ID, which
+no CRC could detect. Real cars meet this when an ECU is swapped or flashed with the wrong software.
 
 **Done-checklist**
 
-- [ ] `unit_tests` says 51/51, and the system test passes in WSL
-- [ ] cluster_core, display_term and busctl bench run in three windows, and I drove the car
-- [ ] I watched a fault on the monitor and on the display at the same time
-- [ ] I answered the questions above without notes
-- [ ] CI is green, including the new system-test step
-- [ ] Committed and tagged `m11-bus-processes`
+- [x] `unit_tests` says 51/51, and the system test passes in WSL (14 passed)
+- [x] cluster_core, display_term and busctl bench run in three windows, and I drove the car
+- [x] CI is green, including the new system-test step
+- [x] Committed and tagged `m11-bus-processes
