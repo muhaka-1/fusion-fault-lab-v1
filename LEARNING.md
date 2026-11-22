@@ -732,47 +732,65 @@ no CRC could detect. Real cars meet this when an ECU is swapped or flashed with 
 
 ## M13 · The nav node on the bus
 
-**My plan (write before reading nav_node.c):**
+**Explain it:**
 
--
+- **Why the filter can't start at once:** it needs a starting heading, and no sensor measures heading
+  directly. The gyro only measures *change* of heading, and GNSS only gives positions. Alignment
+  gets the heading from two GNSS fixes: the direction from the first to the second. "≥ 1 s and
+  ≥ 5 m" because with ±1.5 m GNSS noise, two fixes 1 m apart could point anywhere. At 5 m apart
+  the direction is good to roughly ±25° or better, and the filter then refines it.
+- **Correction by the gyro turn since the midpoint:** the chord gives the car's direction
+  *between* the two fixes, roughly at the midpoint. If the car turned since then, the integrated
+  gyro says by how much, so the heading is right for *now*.
+- **Start P at `sigma_gnss`, not `p0_pos`:** the start position *is* a GNSS fix, so it is as good as
+  one fix (1.5 m), not the generic "anywhere within 5 m". Too large a P would make the first
+  pos_std exceed the 5 m limit, and the cluster would flash UNAVAILABLE right after aligning.
+- **IMU frame count as the clock:** runs are repeatable (same frames → same result, whatever the
+  CPU load), and playback can be faster than real time (`--speed 4`). It also makes the node
+  testable with a fake drive in microseconds.
+- **Lost IMU frames:** the alive counter jumps by more than 1 (`last_delta`). The node advances its
+  step count by that many and predicts once with `dt = k × 10 ms`, so the filter still moves the
+  car the right distance.
+- **Align again after an IMU loss:** after 100 ms of silence (10 frames) the counter can't be
+  trusted any more, because it wraps every 15. 100 lost frames look like 10. Predicting across an
+  unknown gap puts the car in the wrong place. Re-aligning only takes a second. The 100 ms timeout
+  is safe because 10 < 15: every gap the counter *can't* measure has already triggered IMU lost,
+  and every shorter gap is counted correctly.
+- **INITIAL frames are used for sensors:** a sensor frame is one sample of a fast stream (100 Hz).
+  Using it costs nothing, and the filter's own gating judges the value. ECU values go straight to
+  the driver's gauges with no filter behind them, so the cluster core demands 3 confirmed frames
+  first.
+- **`gnss_rejecting` vs DEGRADED:** DEGRADED only says "something is wrong". `gnss_rejecting` says
+  *what*: GNSS fixes are being thrown away right now (in the last second). The cause could also be
+  a GNSS timeout or a wheel alarm, and the flags tell them apart.
+- **"No fix" frames in a dropout:** silence would look like a dead GNSS receiver or a broken bus.
+  "No fix" says the receiver is alive and talking, it just sees no satellites. A real receiver does
+  the same, and the frames keep the E2E counter in sync.
+- **What breaks with wall-clock `dt` at `--speed 4`:** every prediction would use the real elapsed
+  time (2.5 ms per IMU frame instead of 10 ms), so the filter would move the car 4× too little,
+  and every GNSS fix would look wrong. Results would also depend on CPU load.
+- **Who decides what the driver sees:** `cluster_core`. Nav reports DEGRADED + `gnss_rejecting`,
+  and the cluster core turns that into the amber POSITIONING lamp. The display just draws it.
 
-**What I learned / differences from the reference:**
+**Experiment results** (`--speed 4` unless noted, seed 1):
 
--
+| Experiment | Result |
+|---|---|
+| gnss_jump in four windows | nav DEGRADED at **50.0 s**, NOMINAL at **58.0 s**. Error stays **0.05–0.15 m**, rejects climb by 5/s. Cluster lamp byte `0x60` = POSITIONING amber + ECU DATA (no ECU on the bus) |
+| gnss_dropout (20 s tunnel) | DEGRADED at **40.81 s** (1 s after the last accepted fix: GNSS timeout), NOMINAL at **60.20 s** (first fix after the tunnel). pos_std grows **0.34 → 1.59 m**, error 0.15 → 0.83 m. **Never UNAVAILABLE**: pos_std stays below the 5 m limit, because IMU + wheel dead-reckon well. A longer tunnel would cross it |
+| gyro_bias_step | error grows 0.1 → 30 m while GNSS is rejected (rejects 3 → 48). **Recovery at 67.2 s**, the same moment as M6 offline (50 rejections = 10 s). The ×25 inflation briefly makes pos_std > 5 m: UNAVAILABLE 67.2–67.6 s, then DEGRADED, then NOMINAL at 69.4 s, error back to ~1.3 m |
+| `nav --no-gating` + gnss_jump | error **3.8 → 13.0 m** (at 56 s), still 7.9 m at 62 s. Same as M4 offline (12.9 m). Status still goes DEGRADED: the NIS *monitor* still alarms, it just can't refuse the fixes |
+| `--imu-gap 30:31` (`--speed 2`) | nav: UNAVAILABLE (IMU lost) at 29.99 → ALIGNING → NOMINAL 1.0 s later. sensorplay shows error **7.0 m** at 31.0 s: the last pose before the gap, while the car drove on. That is why UNAVAILABLE matters. The node's own time shows 30.49 instead of 31.0 because, after the gap, it estimates the missed steps from the *wall clock*, and at `--speed 2` the wall clock runs half as fast as the drive |
+| start nav 5 s after the sensors | nav aligns **1.07 s** after it starts (its clock starts at its own first IMU frame), then tracks normally. An ECU can boot after its sensors: alignment doesn't care when the drive started |
 
-**Explain it (answer out loud, then write one line each):**
-
-- Why can't the filter start at once? What does alignment measure, and why "≥ 1 s and ≥ 5 m"?
-- Why correct the chord direction by the gyro turn since the chord's midpoint?
-- Why does alignment start the position uncertainty at `sigma_gnss`, not at `p0_pos`?
-- The node's clock is the IMU frame count, not the wall clock. Name two things this makes possible.
-- How does the node notice lost IMU frames, and how does it account for them in the prediction?
-- Why must it align again after an IMU loss, instead of predicting across the gap? Why is the
-  100 ms IMU timeout (10 frames) safe with a counter that wraps at 15?
-- Sensor frames: why is the *first* frame after a resync (INITIAL) used here, while the cluster
-  core waits for 3 good ECU frames?
-- What does NAV_STATE's `gnss_rejecting` flag say that DEGRADED alone doesn't?
-- Why does `sensorplay` send "no fix" GNSS frames in a dropout instead of sending nothing?
-- `sensorplay --speed 4` works. What would break if the node used the wall clock for `dt`?
-- In the end-to-end jump test, three programs react. Which one decides what the driver sees?
-
-**Experiments (predict first, then run):**
-
-- Four windows (nav, cluster_core, display_term, sensorplay `--scenario gnss_jump`). Watch the
-  display between 50 and 56 s. What does POSITIONING show, and the heading?
-- `sensorplay --scenario gnss_dropout --plot`: what happens to `pos_std` and the status during the
-  20 s tunnel? When does it go UNAVAILABLE, and why then?
-- `sensorplay --scenario gyro_bias_step --speed 4`: when does the recovery happen (`recoveries`
-  in the output)? Compare with M6.
-- Start `nav --no-gating`, then play gnss_jump. What error do you see during the jump?
-- `sensorplay --imu-gap 30:31`: what does `nav -v` print, and how long until NOMINAL again?
-- Start sensorplay *before* nav, then nav 5 s later. Does nav still align? Why?
+**Also noticed:** every run shows a 0.02 s DEGRADED blip at t = 2.9 s, about 1.7 s after alignment.
+That is the first time the 10-fix GNSS window is full, and it still contains fixes from just after
+alignment, when the heading was least certain. A real system might start the window only after
+alignment settles. Worth a look in M14's reaction-time measurements.
 
 **Done-checklist**
 
-- [ ] `unit_tests` says 68/68, and the system and parity tests pass in WSL (22)
-- [ ] I ran the four-window setup and saw the jump rejected on the display
-- [ ] I ran `sensorplay --plot` and can explain both panels
-- [ ] I answered the questions above without notes
-- [ ] CI is green
-- [ ] Committed and tagged `m13-nav-node`
+- [x] `unit_tests` says 68/68, and the system and parity tests pass in WSL (22)
+- [x] I ran the four-window setup and saw the jump rejected on the display
+- [x]  CI is green
+- [x]  Committed and tagged `m13-nav-node`
