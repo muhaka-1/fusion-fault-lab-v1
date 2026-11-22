@@ -5,16 +5,21 @@ written in Python and talks to the C nodes, so both sides must produce and read 
 bytes. tests/test_can_contract.py checks this against tests/can_vectors.txt, which is the output
 of the C program target/tools/can_vectors.c.
 
-Python only gets the encoders for what the bench sends (sensors, ECU, inputs, nav commands) and
-the decoders for what it reads (nav and cluster output). The transport (UDP multicast) is M11.
+Python gets the encoders for what the bench sends (sensors, ECU, inputs, nav commands, and
+NAV_STATE until the C nav node exists in M13) and the decoders for what it reads (nav and cluster
+output). M11 adds the transport: the same UDP multicast bus as target/src/common/canbus_udp.c.
 
 Try it:  python -m fusionlab.canbus                      decode every reference frame
          python -m fusionlab.canbus 0x200 d4378...        decode one frame (id, 16 hex digits)
 """
 from __future__ import annotations
 import math
+import os
 import pathlib
+import socket
+import struct
 import sys
+from dataclasses import dataclass, field
 
 # ---- identifiers -------------------------------------------------------------------
 IMU, WHEEL, GNSS = 0x100, 0x110, 0x120
@@ -189,6 +194,20 @@ def enc_nav_cmd(gating: bool, realign: bool, lockout_rejects: int, gate_prob: fl
     return p
 
 
+def enc_nav_state(status: int, flags: int, heading_deg: float, pos_std_m: float, gnss_age_s: float) -> bytearray:
+    """Same as msg_encode_nav_state() in C. status: 0 NOMINAL, 1 DEGRADED, 2 UNAVAILABLE, 3 ALIGNING."""
+    p = _begin(status & 3)
+    p[2] = flags & 0xFF
+    h = math.fmod(heading_deg, 360.0)
+    if h < 0:
+        h += 360.0
+    hc = _sat(h * 100.0, 0, 36000)
+    _u16(p, 3, 0 if hc >= 36000 else hc)
+    _u16(p, 5, _sat(pos_std_m * 100.0, 0, 65534))
+    p[7] = _sat(gnss_age_s * 10.0, 0, 255)
+    return p
+
+
 def dec_nav_state(p):
     return {"status": NAV_STATUS[(p[1] >> 4) & 3], "flags": p[2],
             "flag_names": [k for k, v in NAVF.items() if p[2] & v],
@@ -227,7 +246,75 @@ DECODERS = {IMU: dec_imu, WHEEL: dec_wheel, GNSS: dec_gnss, ENGINE: dec_engine, 
 
 
 ENCODERS = {IMU: enc_imu, WHEEL: enc_wheel, GNSS: enc_gnss, ENGINE: enc_engine, INPUTS: enc_inputs,
-            NAV_CMD: enc_nav_cmd}
+            NAV_CMD: enc_nav_cmd, NAV_STATE: enc_nav_state}
+
+
+# ---- transport -----------------------------------------------------------------------
+WIRE = struct.Struct("<IB3x8s")
+
+
+def pack(can_id: int, payload: bytes) -> bytes:
+    return WIRE.pack(can_id, 8, bytes(payload))
+
+
+def unpack(datagram: bytes):
+    if len(datagram) != WIRE.size:
+        return None
+    can_id, dlc, data = WIRE.unpack(datagram)
+    if dlc > 8 or can_id > 0x7FF:
+        return None
+    return can_id, data
+
+
+@dataclass
+class BusConfig:
+    """Same environment variables as the C nodes; read when the config is created."""
+    group: str = field(default_factory=lambda: os.environ.get("CANBUS_GROUP", "239.255.42.42"))
+    port: int = field(default_factory=lambda: int(os.environ.get("CANBUS_PORT", "42424")))
+    iface: str = field(default_factory=lambda: os.environ.get("CANBUS_IF", "127.0.0.1"))
+
+
+class Bus:
+    """One UDP multicast socket for sending, one for receiving. Every node sees every frame.
+    Linux / WSL / macOS. (Windows and WSL do not share a loopback: run the whole bus on one side.)"""
+
+    def __init__(self, cfg: BusConfig | None = None):
+        self.cfg = cfg or BusConfig()
+        c = self.cfg
+        self.tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self.tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+        self.tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+        self.tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(c.iface))
+        self.rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self.rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            try:
+                self.rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except OSError:
+                pass
+        self.rx.bind(("", c.port))
+        self.rx.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                           struct.pack("4s4s", socket.inet_aton(c.group), socket.inet_aton(c.iface)))
+        self.rx.settimeout(0.1)
+        self._dst = (c.group, c.port)
+
+    def send(self, can_id: int, payload: bytes) -> None:
+        self.tx.sendto(pack(can_id, payload), self._dst)
+
+    def recv(self):
+        """Returns (id, data) or None on timeout / malformed datagram."""
+        try:
+            d = self.rx.recv(64)
+        except (socket.timeout, OSError):
+            return None
+        return unpack(d)
+
+    def close(self) -> None:
+        for s in (self.tx, self.rx):
+            try:
+                s.close()
+            except OSError:
+                pass
 
 
 def _show(can_id: int, p: bytes) -> None:

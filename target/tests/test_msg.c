@@ -1,6 +1,7 @@
 #include "test.h"
 #include "can_msg.h"
 #include "e2e.h"
+#include "canbus.h"
 #include <string.h>
 
 static void imu_roundtrip_and_resolution(void)
@@ -140,6 +141,22 @@ static void rounding_is_half_away_from_zero(void)
     CHECK_NEAR(d.y_m, -0.13, 1e-12);
 }
 
+static void wire_format_roundtrip_and_rejects(void)
+{
+    /* M11: one CAN frame = one 16-byte UDP datagram. Anything else is dropped. */
+    can_frame_t f = { 0x401, 8, { 1, 2, 3, 4, 5, 6, 7, 8 } }, g;
+    unsigned char w[CANBUS_WIRE_LEN];
+    canbus_pack(&f, w);
+    CHECK_EQ(w[0], 0x01); CHECK_EQ(w[1], 0x04); CHECK_EQ(w[4], 8);   /* id little endian, dlc */
+    CHECK_EQ(canbus_unpack(w, CANBUS_WIRE_LEN, &g), 0);
+    CHECK(g.id == f.id && g.dlc == 8 && memcmp(g.data, f.data, 8) == 0);
+    CHECK_EQ(canbus_unpack(w, 15, &g), -1);                  /* short datagram */
+    w[4] = 9;
+    CHECK_EQ(canbus_unpack(w, CANBUS_WIRE_LEN, &g), -1);     /* dlc > 8 */
+    w[4] = 8; w[1] = 0x08;
+    CHECK_EQ(canbus_unpack(w, CANBUS_WIRE_LEN, &g), -1);     /* id > 11 bit */
+}
+
 void suite_msg(void)
 {
     RUN(imu_roundtrip_and_resolution);
@@ -152,4 +169,5 @@ void suite_msg(void)
     RUN(every_message_has_its_id_and_8_bytes);
     RUN(encode_protect_check_decode);
     RUN(rounding_is_half_away_from_zero);
+    RUN(wire_format_roundtrip_and_rejects);
 }

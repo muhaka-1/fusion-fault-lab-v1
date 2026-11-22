@@ -45,6 +45,16 @@ CLUSTER_A lamps: 0 left, 1 right, 2 dipped, 3 main beam, 4 check engine, 5 ECU d
 6 positioning amber, 7 positioning red. Lamps 2: 0 input fault, 1 hazard active.
 Positioning text: 0 OK, 1 DEGRADED, 2 UNAVAILABLE, 3 ALIGNING, 4 NAV DATA LOST.
 
+## Transport on the bench
+
+There is no CAN hardware yet, so frames travel as 16-byte UDP multicast datagrams
+(`id u32 | dlc u8 | 3 × 0 | data[8]`) on group `239.255.42.42`, port `42424`, TTL 1. Every
+node sees every frame, like a bus. Settings: `CANBUS_GROUP`, `CANBUS_PORT`, `CANBUS_IF`
+(address of the network interface to use; `127.0.0.1` when everything runs on one machine).
+The wire format is in `target/src/common/canbus_wire.c` (portable) and the sockets in
+`canbus_udp.c` (POSIX). Replacing `canbus_udp.c` with a SocketCAN or QNX `dev-can-*` backend is
+the only change needed for a real adapter.
+
 ## Where this is used
 
 | Module | Uses |

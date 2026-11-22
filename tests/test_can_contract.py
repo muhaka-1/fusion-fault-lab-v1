@@ -41,6 +41,8 @@ def test_encoders_match_c():
     assert v["engine"] == _py(cb.ENGINE, cb.enc_engine(3456, 123.45, True, True), 7)
     assert v["inputs"] == _py(cb.INPUTS, cb.enc_inputs(cb.IN_STALK_LEFT | cb.IN_DIP_SWITCH | cb.IN_FLASH), 9)
     assert v["nav_cmd"] == _py(cb.NAV_CMD, cb.enc_nav_cmd(True, False, 50, 0.999), 4)
+    assert v["nav_state"] == _py(cb.NAV_STATE, cb.enc_nav_state(1, cb.NAVF["gnss_alarm"] | cb.NAVF["recovery"],
+                                                                 271.5, 1.25, 2.4), 5)        # M11
 
 
 def test_decoders_match_c():
@@ -93,3 +95,12 @@ def test_c_still_prints_the_vectors():
     except OSError:
         pytest.skip("can_vectors was built for another OS (e.g. in WSL); run this test there")
     assert out.splitlines() == VEC.read_text().splitlines()
+
+
+def test_wire_format_matches_c():
+    # same 16-byte datagram as canbus_pack() in C (target/tests/test_msg.c checks the C side)
+    w = cb.pack(0x401, bytes(range(1, 9)))
+    assert len(w) == 16 and w[:5] == bytes([0x01, 0x04, 0, 0, 8]) and w[8:] == bytes(range(1, 9))
+    assert cb.unpack(w) == (0x401, bytes(range(1, 9)))
+    assert cb.unpack(w[:15]) is None
+    assert cb.unpack(cb.WIRE.pack(0x800, 8, bytes(8))) is None          # not an 11-bit id

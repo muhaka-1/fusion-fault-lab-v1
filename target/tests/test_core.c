@@ -414,6 +414,25 @@ static void ecu_start_up_has_no_false_fault(void)
     CHECK_EQ(b.a.rpm, CAN_U16_INVALID);
 }
 
+static void ecu_needs_three_good_frames_after_a_freeze(void)
+{
+    /* R8, measured inside the core: after the ECU comes back, values may return only after
+     * 3 good frames in a row (60 ms at 20 ms per frame), plus the E2E resync. */
+    bench_t b;
+    bench_init(&b);
+    step(&b, 300);
+    b.freeze_ecu_counter = true;                 /* ECU hangs: timeout, gauges "--" */
+    step(&b, 200);
+    CHECK(!b.c.ecu_valid);
+    b.freeze_ecu_counter = false;
+    int back_after = -1;
+    for (int ms = 10; ms <= 200 && back_after < 0; ms += 10) {
+        step(&b, 10);
+        if (b.c.ecu_valid) back_after = ms;
+    }
+    CHECK(back_after >= 60);
+}
+
 /* ---- R11, R12 positioning ---- */
 static void nav_statuses_map_to_lamps(void)
 {
@@ -500,6 +519,7 @@ void suite_core(void)
     RUN(single_speed_spike_rejected_but_persistent_change_accepted);
     RUN(ecu_start_up_has_no_false_fault);
     RUN(check_engine_follows_valid_ecu_only);
+    RUN(ecu_needs_three_good_frames_after_a_freeze);
     RUN(nav_statuses_map_to_lamps);
     RUN(nav_loss_is_red_with_no_heading);
     RUN(outputs_every_50_ms);

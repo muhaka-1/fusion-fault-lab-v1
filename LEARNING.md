@@ -596,3 +596,49 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 - [ ] I answered the questions above without notes
 - [x] CI is green (all 8 jobs, including Windows)
 - [x] Committed and tagged `m10-cluster-supervision`
+## M11 · The bus and separate processes
+
+**My plan (write before reading canbus_udp.c and core_main.c):**
+
+-
+
+**What I learned / differences from the reference:**
+
+-
+
+**Explain it (answer out loud, then write one line each):**
+
+- Why multicast? What would change with plain UDP to one address, or with TCP?
+- Why is the TTL 1 and the interface 127.0.0.1? What could happen with a bigger TTL on a real network?
+- Why split `canbus_wire.c` from `canbus_udp.c`? What is the only file to replace for real CAN hardware?
+- Why does `canbus_unpack` reject datagrams that are not exactly 16 bytes, dlc > 8, or id > 0x7FF?
+- `core_main.c` waits for frames until the next 10 ms tick instead of sleeping. Why?
+- Why `CLOCK_MONOTONIC` and not the time of day? What happens to the core when NTP changes the clock?
+- What does `core_main.c` do when it is far behind (more than 50 ms), and why?
+- The display makes no decisions. What is its one rule, and why is a frozen picture dangerous?
+- Why does the display draw nothing until both CLUSTER_A and CLUSTER_B are fresh?
+- What does the system test check that the unit tests can't? Name two things.
+- Why can't Python in Git Bash talk to `cluster_core` in WSL on 127.0.0.1?
+
+**Experiments (predict first, then run):**
+
+- With all three running: `left`, then `ecu freeze`, then `ecu ok`. Watch `display_term` and the
+  `cluster_core -v` log. Which lamp bits change (`lamps 0x..`)? Decode them with `docs/can_messages.md`.
+- In a 4th window: `PYTHONPATH=src python3 -m fusionlab.busctl monitor`. What rates do you see for
+  each message? Do they match the periods in `docs/can_messages.md`?
+- Stop `cluster_core` with Ctrl+C while the display runs. How fast does it say NO SIGNAL FROM CORE?
+  Start it again: what does the cluster show in the first 100 ms, and why?
+- `inputs off` while `dip on`: what happens to the dipped-beam lamp, and when you send `inputs on`?
+- Run two benches at once (two windows with `busctl bench`). What does the core see? Which rule
+  catches it? (hint: two senders, two alive counters on the same ID)
+- Run the system test with `CANBUS_PORT` unchanged while your three programs run. Why doesn't it
+  get confused by your bench? (look at the `rig` fixture)
+
+**Done-checklist**
+
+- [ ] `unit_tests` says 51/51, and the system test passes in WSL
+- [ ] cluster_core, display_term and busctl bench run in three windows, and I drove the car
+- [ ] I watched a fault on the monitor and on the display at the same time
+- [ ] I answered the questions above without notes
+- [ ] CI is green, including the new system-test step
+- [ ] Committed and tagged `m11-bus-processes`

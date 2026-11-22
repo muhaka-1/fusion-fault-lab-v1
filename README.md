@@ -17,7 +17,8 @@ module at a time; each module ends in tests that pass.
 | M8 · CAN messages in C and Python | done |
 | M9 · Cluster core: inputs | done |
 | M10 · Cluster core: ECU and nav supervision | done |
-| M11 · Bus and processes | next |
+| M11 · Bus and processes | done |
+| M12 · EKF in C, parity with Python | next |
 
 ## M1 · Simulator
 
@@ -305,7 +306,7 @@ silence for 300 ms gives red NAV DATA LOST (R11, R12).
 ```bash
 # WSL
 cmake -S target -B target/build -DSANITIZE=ON && cmake --build target/build
-./target/build/unit_tests                       # 49/49 tests passed
+./target/build/unit_tests                       # 50/50 tests passed
 ./target/build/cluster_sim                      # M10 demo: every ECU and nav fault
 ./target/build/cluster_sim --inputs             # M9 demo: stalks, hazard, beams
 ./target/build/cluster_sim 0:- 1000:ecu=freeze 1500:ecu=ok    # your own script
@@ -314,3 +315,40 @@ cmake -S target -B target/build -DSANITIZE=ON && cmake --build target/build
 Settings for scripts: `ecu=ok|off|corrupt|freeze`, `speed=KPH`, `rpm=RPM`, `mil=0|1`,
 `nav=nominal|degraded|unavailable|aligning|off`, comma-separated: `2000:speed=80,rpm=2500`.
 Under the diagram, "what happened" lists every bench change and every change on the cluster.
+
+## M11 · The bus and separate processes
+
+Until now the core was a library called by tests. In M11 every part becomes its own program,
+talking only through the CAN bus, like separate ECUs in a car:
+
+```
+ busctl bench (Python)              cluster_core (C)                 display_term (C)
+ input board, ECU, nav  ── INPUTS, ENGINE, NAV_STATE ──▶  decides  ── CLUSTER_A/B ──▶  draws
+                         ◀──────────────────── every node sees every frame ───────────────────
+```
+
+* **The bus** (`canbus_wire.c`, `canbus_udp.c`, and `Bus` in `canbus.py`): each CAN frame is a
+  16-byte UDP multicast datagram on 239.255.42.42:42424, loopback only (TTL 1).
+* **`cluster_core`**: the M9/M10 core in a 10 ms loop on the monotonic clock. This is the only
+  place that decides anything.
+* **`display_term`**: draws CLUSTER_A/B in the terminal and makes no decisions. Its only rule is
+  about itself: no valid frame from the core for 250 ms → NO SIGNAL FROM CORE, never a frozen picture.
+* **`python3 -m fusionlab.busctl bench`**: plays the input board, the ECU and nav. You type commands.
+* **`python3 -m fusionlab.busctl monitor`**: every message on the bus, its rate and its E2E result.
+* **`tests/test_system.py`**: starts the real C programs and checks what crosses the bus: blink
+  period, ECU faults, input board loss, nav loss, and the display blanking when the core dies.
+
+The bus programs need POSIX sockets, so run M11 in **WSL** (Windows and WSL don't share a
+loopback, so all parts must run on the same side). MSYS2 still builds the portable parts.
+
+```bash
+# WSL: build, then the system test (needs pytest: sudo apt install -y python3-pytest)
+cmake -S target -B target/build -DSANITIZE=ON && cmake --build target/build
+./target/build/unit_tests                                   # 51/51 tests passed
+python3 -m pytest -q tests/test_system.py tests/test_can_contract.py
+
+# three Ubuntu windows, all in the repo folder:
+./target/build/cluster_core -v                              # 1: the decider
+./target/build/display_term                                 # 2: the cluster
+PYTHONPATH=src python3 -m fusionlab.busctl bench            # 3: you are the car
+```
