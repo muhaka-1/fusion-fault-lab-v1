@@ -69,6 +69,8 @@ jobs:
         run: ./target/build/unit_tests
       - name: Demo
         run: ./target/build/e2e_demo
+      - name: C still prints the committed reference frames (M8)
+        run: ./target/build/can_vectors | diff - tests/can_vectors.txt
 
   c-target-windows:
     name: C target (Windows, MSYS2 gcc)
@@ -86,6 +88,7 @@ jobs:
       - run: cmake -S target -B target/build -G Ninja
       - run: cmake --build target/build
       - run: ./target/build/unit_tests.exe
+      - run: ./target/build/can_vectors.exe | diff --strip-trailing-cr - tests/can_vectors.txt
 
   benchmark:
     name: plots and benchmark

@@ -7,6 +7,7 @@ const char *t_name;
 int main(void)
 {
     suite_e2e();
+    suite_msg();
     printf("%d/%d tests passed (%d checks)\n", t_run - t_fail, t_run, t_checks);
     return t_fail ? 1 : 0;
 }

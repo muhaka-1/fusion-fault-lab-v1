@@ -14,7 +14,8 @@ module at a time; each module ends in tests that pass.
 | M5 · NIS gating and the fault monitor | done |
 | M6 · Lock-out recovery and the benchmark | done |
 | M7 · C build, test framework, E2E protection | done |
-| M8 · CAN messages in C and Python | next |
+| M8 · CAN messages in C and Python | done |
+| M9 · Cluster core: inputs | next |
 
 ## M1 · Simulator
 
@@ -210,4 +211,36 @@ cmake --build target/build
 ./target/build/unit_tests                       # 10/10 tests passed
 ./target/build/e2e_demo                         # every receiver verdict, frame by frame
 ./target/build/e2e_demo 0x200 5                 # the bytes of 5 protected frames
+```
+
+## M8 · CAN messages in C and Python
+
+Every signal in the system travels in one of 11 CAN messages. M8 defines them once
+([docs/can_messages.md](docs/can_messages.md)) and implements them twice:
+
+* **C** (`target/include/can_msg.h`, `target/src/common/can_msg.c`): encode and decode for every
+  message. This is what the nav node and the cluster core will use.
+* **Python** (`src/fusionlab/canbus.py`): the same E2E protection, encoders for what the bench sends
+  (sensors, ECU, inputs, nav commands) and decoders for what it reads (nav and cluster output).
+
+Signals are scaled integers, little endian: speed in 0.01 m/s as `u16`, position in cm as a signed
+24-bit integer, and so on. Out-of-range values saturate instead of wrapping, and `0xFFFF` means
+"no valid value" so the display can draw `--`.
+
+**The contract test.** `target/tools/can_vectors.c` prints one protected frame per message.
+Its output is committed as `tests/can_vectors.txt`. Python checks it can produce and read exactly
+those bytes, and CI checks that C still prints exactly that file. Change either side alone and a
+test fails.
+
+```bash
+# C (WSL)
+cmake -S target -B target/build -DSANITIZE=ON && cmake --build target/build
+./target/build/unit_tests                       # 20/20 tests passed
+./target/build/can_vectors                      # the reference frames
+./target/build/can_vectors | diff - tests/can_vectors.txt && echo "C unchanged"
+
+# Python (Git Bash or WSL)
+python -m pytest -q tests/test_can_contract.py  # 6 tests (1 skipped if C is not built on this OS)
+python -m fusionlab.canbus                      # decode every reference frame
+python -m fusionlab.canbus 0x200 d437800d39300000
 ```

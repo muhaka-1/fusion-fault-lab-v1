@@ -22,4 +22,5 @@ extern int t_cur_fail;
 #define RUN(fn) do { t_name = #fn; t_cur_fail = 0; t_run++; fn(); if (t_cur_fail) t_fail++; } while (0)
 
 void suite_e2e(void);   /* M7 */
+void suite_msg(void);   /* M8 */
 #endif

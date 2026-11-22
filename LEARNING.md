@@ -348,6 +348,82 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 
 **My plan (write before reading e2e.c):**
 
+- (your own: e.g. "CRC over the payload, counter that increments, receiver compares to the last counter")
+
+**What I learned / differences from the reference:**
+
+- (your own: e.g. "I forgot the message ID in the CRC" / "I didn't think of the resync state")
+
+**Explain it:**
+
+- **-Werror / -Wconversion:** -Werror makes warnings fail the build, so they can't pile up and get
+  ignored. -Wconversion flags silent narrowing (int → uint8_t): in C, `uint8_t << 1` becomes an int,
+  and putting it back in a uint8_t drops bits without a word. That is why e2e.c casts explicitly.
+- **CRC protects against:** random corruption on the wire or in buffers. It catches all 1- and 2-bit
+  errors in this frame, and about 255/256 of everything else.
+  **It can NOT detect:** an old frame that is still valid (frozen sender), lost or reordered frames,
+  wrong data that was protected correctly (garbage in, protected garbage out), or deliberate tampering.
+  The CRC has no secret key, so this is safety, not security.
+- **The alive counter adds:** freshness and order. It detects repeated, lost and out-of-sequence frames,
+  which all have valid CRCs.
+- **Message ID in the CRC:** it catches masquerading. A frame of another message with the same layout
+  (wrong mailbox, gateway routing error) would otherwise pass. The demo shows the same bytes as 0x210
+  giving BAD_CRC. Both sides already know the ID, so it costs no payload bytes.
+- **Counter 0–14, never 15:** 0xF is reserved as invalid (AUTOSAR Profile 1). A nibble stuck at all
+  ones (erased memory, bus stuck recessive) gives BAD_COUNTER instead of looking like a valid frame.
+- **REPEATED vs WRONG_SEQUENCE:** REPEATED (delta 0) means the sender is still on the bus but no longer
+  updating: a hung task, or the CAN controller re-sending its last mailbox. WRONG_SEQUENCE
+  (delta > max_delta) means too many frames were lost (bus overload, sender reset), so the stream is
+  broken and must resync.
+  Catch: the counter wraps every 15 frames, so losing exactly 15 frames looks like REPEATED, and 16
+  looks like OK. A receive timeout is still needed (e2e.h leaves that to the caller).
+- **INITIAL after resync:** one frame alone proves nothing. It could be the first frame after a sender
+  reset, with junk start values. The receiver waits for `sync_needed` frames in sequence before passing
+  data to the EKF or the cluster.
+- **Own test framework:** about 40 lines and no dependencies, so it builds anywhere, including the QNX
+  cross compiler later. Nothing to install, plain C (GoogleTest needs C++), and small enough to read
+  in full. Trade-off: no fixtures, mocks or XML reports; Unity would be the choice for a bigger project.
+- **Sanitizers:** tests only check the outputs they look at.
+  - ASan catches out-of-bounds reads and writes, use-after-free and stack overflows that happen not to
+    change the result (e.g. reading payload[8]).
+  - UBSan catches signed overflow, shifts past the type width and misaligned access: undefined
+    behaviour that works on x86 gcc today and breaks on ARM, QNX or another -O level.
+
+**Experiment results:**
+
+| Experiment | Prediction | Result |
+|---|---|---|
+| `e2e_demo 0x200 16` | wraps 14 → 0 | ctr 14 → 0, still `OK`: delta = (0 + 15 − 14) mod 15 = 1 |
+| Flip two bits (`^= 0x03`) | all caught | 10/10 pass. Exhaustive check of every pair of the 64 bits: 2016/2016 caught |
+| (bonus) every 3- and 4-bit flip | ? | 3-bit: 198 of 41 664 **missed** (0.48 %). 4-bit: 0.386 % missed, about 1/256 |
+| Poly 0x1D → 0x07 | many tests fail | **Only `crc_check_value` fails** (0x04 vs 0x4B). The other 9 pass. |
+| REPEATED → OK | `repeated_frame_detected` fails | Yes, lines 95–96 (got OK = 0, wanted REPEATED = 3). The demo shows the repeated frame as OK |
+
+**Takeaways:**
+
+- **Round-trip tests can't catch a symmetric bug.** Sender and receiver call the same CRC function, so
+  a wrong polynomial still agrees with itself. Only a known-answer test (the catalogue check value
+  0x4B) catches it. On a real car, every other ECU would reject our frames. M8's Python encoder must
+  match the same vector.
+- **CRC-8 J1850 has Hamming distance 3 at this frame length.** It guarantees 1- and 2-bit errors, not 3.
+  0x11D has an odd number of terms, so unlike some CRCs it doesn't catch all odd-weight errors.
+  CAN's own 15-bit CRC sits underneath, so the E2E CRC is a second layer.
+- **REPEATED returning OK on a real car:** a hung speed ECU keeps re-sending "50 km/h", and the cluster
+  shows it as fresh while the car brakes to a stop. The EKF would fuse stale wheel speed as truth.
+
+**Done-checklist**
+
+- [x] C compiler and CMake installed (WSL), `unit_tests` says 10/10, run twice
+- [x] `e2e_demo` runs and I can explain every line of its output
+- [ ] I can explain every line of `e2e.c` and `test.h`
+- [ ] I answered the questions above without notes
+- [ ] CI shows the C jobs green
+- [ ] Committed and tagged `m07-c-e2e`
+
+## M8 · CAN messages in C and Python
+
+**My plan (write before reading can_msg.c):**
+
 -
 
 **What I learned / differences from the reference:**
@@ -356,30 +432,34 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 
 **Explain it (answer out loud, then write one line each):**
 
-- What does `-Werror` buy you, and why add `-Wconversion` for embedded code?
-- What does the CRC protect against, and what can it NOT detect? (hint: a frozen sender)
-- What does the alive counter protect against that the CRC can't?
-- Why is the message ID part of the CRC, when it is not even in the payload?
-- Why does the counter count 0–14 and never send 15?
-- What is the difference between REPEATED and WRONG_SEQUENCE, and what does each say about the sender?
-- Why is a frame after a resync INITIAL (not trusted yet) instead of OK?
-- The test framework has no dependencies. Why not use a big framework (CUnit, Unity, GoogleTest)?
-- What do the address and undefined-behaviour sanitizers catch that the tests alone would miss?
+- Why send scaled integers (speed in 0.01 m/s as u16) instead of floats? What does the scale cost you?
+- What is the resolution and the range of IMU yaw rate (int24, 1e-6 rad/s)? Is that enough for a car?
+- Why saturate out-of-range values instead of letting them wrap? What would a wrapped wheel speed do to the EKF?
+- Why is "little endian" written in the spec? What breaks if one side uses big endian?
+- How does `get_i24` turn 3 bytes back into a negative number?
+- Why does `0xFFFF` mean "no valid value" in CLUSTER_A, and why is the largest real speed 65534?
+- Why does the GNSS message have a "fix valid" flag instead of sending x = 0, y = 0?
+- Why must Python use `_lround` and not `round()`? Give a value where they differ.
+- Why is `tests/can_vectors.txt` committed, instead of running C from the Python test every time?
+- The flags go in the high nibble of byte 1. Why there, and what else lives in byte 1?
 
 **Experiments (predict first, then run):**
 
-- `./target/build/e2e_demo 0x200 16`: what happens to the counter after 14?
-- In `test_e2e.c`, `every_single_bit_flip_is_caught` checks 64 single-bit flips. Change it to flip
-  two bits (`q[byte] ^= 0x03`): are all double flips still caught? (CRC-8 J1850 guarantees all
-  single and double flips in short frames.) Undo afterwards.
-- Change the CRC polynomial from 0x1D to 0x07 in `e2e.c`: which test fails first, and why?
-- Break `e2e_check` so REPEATED returns OK: which test fails? What would that mean on a real car?
+- `python -m fusionlab.canbus 0x110 a70ed30400000000`: what speed is it? Change one data byte (keep
+  the CRC): what does the E2E check say now?
+- In `canbus.py`, replace `_lround` with Python's `round` in `_sat`. Which contract test fails, and
+  for which message? Undo afterwards.
+- In `can_msg.c`, swap the two bytes in `put_u16` (big endian). Rebuild: which C tests still pass,
+  and why? Then run `can_vectors | diff - tests/can_vectors.txt`. Undo afterwards.
+- Encode a wheel speed of 700 m/s and of -3 m/s (Python or C). What comes out, and why?
+- Encode heading -10° in NAV_STATE. What does the decoder give back?
 
 **Done-checklist**
 
-- [ ] C compiler and CMake installed (WSL or MSYS2), `unit_tests` says 10/10, run twice
-- [ ] `e2e_demo` runs and I can explain every line of its output
-- [ ] I can explain every line of `e2e.c` and `test.h`
+- [ ] `unit_tests` says 20/20 in WSL
+- [ ] `can_vectors | diff - tests/can_vectors.txt` prints nothing
+- [ ] `python -m pytest -q` passes in Git Bash (the C-output test may be skipped there)
+- [ ] I can decode one frame by hand: id, CRC, counter, flags, every signal
 - [ ] I answered the questions above without notes
-- [ ] CI shows the C jobs green
-- [ ] Committed and tagged `m07-c-e2e`
+- [ ] CI is green, including the new reference-frame step
+- [ ] Committed and tagged `m08-can-messages`
