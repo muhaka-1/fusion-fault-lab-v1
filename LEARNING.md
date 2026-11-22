@@ -343,3 +343,43 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 - [ ] I can explain every new line in `ekf.py`, `run.py` and `benchmark.py`
 - [ ] I answered the questions above without notes
 - [ ] Committed and tagged `m06-recovery-benchmark`; Phase 1 done
+
+## M7 · C build, test framework and E2E protection
+
+**My plan (write before reading e2e.c):**
+
+-
+
+**What I learned / differences from the reference:**
+
+-
+
+**Explain it (answer out loud, then write one line each):**
+
+- What does `-Werror` buy you, and why add `-Wconversion` for embedded code?
+- What does the CRC protect against, and what can it NOT detect? (hint: a frozen sender)
+- What does the alive counter protect against that the CRC can't?
+- Why is the message ID part of the CRC, when it is not even in the payload?
+- Why does the counter count 0–14 and never send 15?
+- What is the difference between REPEATED and WRONG_SEQUENCE, and what does each say about the sender?
+- Why is a frame after a resync INITIAL (not trusted yet) instead of OK?
+- The test framework has no dependencies. Why not use a big framework (CUnit, Unity, GoogleTest)?
+- What do the address and undefined-behaviour sanitizers catch that the tests alone would miss?
+
+**Experiments (predict first, then run):**
+
+- `./target/build/e2e_demo 0x200 16`: what happens to the counter after 14?
+- In `test_e2e.c`, `every_single_bit_flip_is_caught` checks 64 single-bit flips. Change it to flip
+  two bits (`q[byte] ^= 0x03`): are all double flips still caught? (CRC-8 J1850 guarantees all
+  single and double flips in short frames.) Undo afterwards.
+- Change the CRC polynomial from 0x1D to 0x07 in `e2e.c`: which test fails first, and why?
+- Break `e2e_check` so REPEATED returns OK: which test fails? What would that mean on a real car?
+
+**Done-checklist**
+
+- [ ] C compiler and CMake installed (WSL or MSYS2), `unit_tests` says 10/10, run twice
+- [ ] `e2e_demo` runs and I can explain every line of its output
+- [ ] I can explain every line of `e2e.c` and `test.h`
+- [ ] I answered the questions above without notes
+- [ ] CI shows the C jobs green
+- [ ] Committed and tagged `m07-c-e2e`

@@ -1,5 +1,7 @@
 # fusion-fault-lab (v1, built module by module)
 
+[![CI](https://github.com/muhaka-1/fusion-fault-lab-v1/actions/workflows/ci.yml/badge.svg)](https://github.com/muhaka-1/fusion-fault-lab-v1/actions/workflows/ci.yml)
+
 Sensor fusion (IMU + wheel speed + GNSS) with fault detection. This repository grows one
 module at a time; each module ends in tests that pass.
 
@@ -11,7 +13,8 @@ module at a time; each module ends in tests that pass.
 | M4 · Fault injection and metrics | done |
 | M5 · NIS gating and the fault monitor | done |
 | M6 · Lock-out recovery and the benchmark | done |
-| Phase 2 (M7–M10): C foundations | next |
+| M7 · C build, test framework, E2E protection | done |
+| M8 · CAN messages in C and Python | next |
 
 ## M1 · Simulator
 
@@ -184,3 +187,27 @@ python -m fusionlab.benchmark            # ~2–4 min, writes docs/results.md
 ![M6](docs/m6_recovery.png)
 
 Phase 1 (the Python estimation core) is complete. Next: the C target.
+
+## M7 · C build, test framework and E2E protection
+
+Phase 2 starts the C target: the code that will run on the Raspberry Pi under QNX. M7 sets up a
+CMake build that treats every warning as an error, a minimal test framework (`target/tests/test.h`,
+no dependencies), and the end-to-end protection every CAN message will carry:
+
+| Byte | Content |
+|---|---|
+| 0 | CRC-8 SAE J1850 (poly 0x1D, init 0xFF, xor 0xFF) over the 16-bit message ID and bytes 1–7 |
+| 1, bits 0–3 | alive counter 0–14, +1 per frame (15 is never sent) |
+| 1, bits 4–7 | free for message flags |
+
+The receiver classifies every frame: `OK`, `OK_SOME_LOST`, `INITIAL` (first frame or resync),
+`REPEATED` (sender hung), `WRONG_SEQUENCE`, `BAD_CRC`, `BAD_COUNTER`. Only `OK` and
+`OK_SOME_LOST` count as fresh data. Modelled on AUTOSAR E2E Profile 1, simplified, not certified.
+
+```bash
+cmake -S target -B target/build                 # add -DSANITIZE=ON on Linux for ASan + UBSan
+cmake --build target/build
+./target/build/unit_tests                       # 10/10 tests passed
+./target/build/e2e_demo                         # every receiver verdict, frame by frame
+./target/build/e2e_demo 0x200 5                 # the bytes of 5 protected frames
+```

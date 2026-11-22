@@ -1,5 +1,6 @@
 # Continuous integration for fusion-fault-lab-v1.
 #   tests:      every push and pull request, Linux + Windows, Python 3.11 + 3.12
+#   c-target:   the C code (from M7): gcc with sanitizers, clang, and MSYS2 gcc on Windows
 #   benchmark:  after the tests pass on main, or by hand (Actions tab -> CI -> Run workflow);
 #               redraws the plots, runs the benchmark, uploads them as a downloadable artifact
 name: CI
@@ -47,6 +48,44 @@ jobs:
         run: |
           python -m fusionlab.run --scenario gnss_jump
           python -m fusionlab.run --scenario gyro_bias_step --no-recovery
+
+  c-target:
+    name: C target (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "Linux gcc, sanitizers", os: ubuntu-latest, cc: gcc, sanitize: "ON" }
+          - { name: "Linux clang", os: ubuntu-latest, cc: clang, sanitize: "OFF" }
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure
+        run: cmake -S target -B target/build -DCMAKE_C_COMPILER=${{ matrix.cc }} -DSANITIZE=${{ matrix.sanitize }}
+      - name: Build
+        run: cmake --build target/build -j
+      - name: Unit tests
+        run: ./target/build/unit_tests
+      - name: Demo
+        run: ./target/build/e2e_demo
+
+  c-target-windows:
+    name: C target (Windows, MSYS2 gcc)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
+      - run: cmake -S target -B target/build -G Ninja
+      - run: cmake --build target/build
+      - run: ./target/build/unit_tests.exe
 
   benchmark:
     name: plots and benchmark
