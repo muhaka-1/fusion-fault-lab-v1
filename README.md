@@ -16,7 +16,8 @@ module at a time; each module ends in tests that pass.
 | M7 · C build, test framework, E2E protection | done |
 | M8 · CAN messages in C and Python | done |
 | M9 · Cluster core: inputs | done |
-| M10 · Cluster core: ECU and nav supervision | next |
+| M10 · Cluster core: ECU and nav supervision | done |
+| M11 · Bus and processes | next |
 
 ## M1 · Simulator
 
@@ -278,3 +279,38 @@ cmake -S target -B target/build -DSANITIZE=ON && cmake --build target/build
 
 `cluster_sim` switches: `L` left, `R` right, `H` hazard, `D` dipped, `M` main beam, `F` flash,
 `-` nothing, `X` the input board goes silent, `~` prefix: the contacts bounce for 20 ms.
+
+## M10 · Cluster core: ECU and nav supervision
+
+The core now also reads the engine ECU (ENGINE, every 20 ms) and the nav process (NAV_STATE, every
+100 ms), and decides what the gauges and the positioning lamp show. The main rule is **R13: a value
+is never shown stale**. Without fresh, trusted data the gauge shows `--`, never the last value.
+
+An ECU frame goes through four checks before it reaches a needle (R6):
+
+| Check | Catches | On failure |
+|---|---|---|
+| E2E: CRC | corruption on the wire | discard |
+| E2E: alive counter | a hung ECU whose CAN controller keeps resending | discard |
+| range: rpm ≤ 8000, speed ≤ 300 km/h | garbage values with a valid CRC | discard |
+| rate: speed change ≤ 10 km/h per frame | a single spike (14 g is impossible) | discard, re-anchor |
+
+Discarded frames don't count as "heard from the ECU", so a stream of bad frames ends in the same
+100 ms timeout as silence (R7): ECU DATA red, speed and rpm `--`. Values return only after
+3 good frames in a row (R8). CHECK ENGINE only comes from a trusted frame (R9).
+
+Nav: DEGRADED or ALIGNING gives an amber POSITIONING lamp, UNAVAILABLE gives red and no heading,
+silence for 300 ms gives red NAV DATA LOST (R11, R12).
+
+```bash
+# WSL
+cmake -S target -B target/build -DSANITIZE=ON && cmake --build target/build
+./target/build/unit_tests                       # 49/49 tests passed
+./target/build/cluster_sim                      # M10 demo: every ECU and nav fault
+./target/build/cluster_sim --inputs             # M9 demo: stalks, hazard, beams
+./target/build/cluster_sim 0:- 1000:ecu=freeze 1500:ecu=ok    # your own script
+```
+
+Settings for scripts: `ecu=ok|off|corrupt|freeze`, `speed=KPH`, `rpm=RPM`, `mil=0|1`,
+`nav=nominal|degraded|unavailable|aligning|off`, comma-separated: `2000:speed=80,rpm=2500`.
+Under the diagram, "what happened" lists every bench change and every change on the cluster.

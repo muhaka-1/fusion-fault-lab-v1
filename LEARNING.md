@@ -530,3 +530,47 @@ Bias 0.01: 18.2 m and NIS 148. The error grows in proportion to the bias (2.5× 
 - [ ] I answered the questions above without notes
 - [ ] CI is green (the C jobs now also run `cluster_sim`)
 - [ ] Committed and tagged `m09-cluster-inputs`
+
+## M10 · Cluster core: ECU and nav supervision
+
+**My plan (write before reading on_engine):**
+
+-
+
+**What I learned / differences from the reference:**
+
+-
+
+**Explain it (answer out loud, then write one line each):**
+
+- R13 says "never stale". Why is `--` safer than showing the last good speed for a few seconds?
+- Why does a rejected frame not refresh `ecu_last_ms`? What would happen with a corrupt stream if it did?
+- What does the alive counter catch that the CRC can't, in the ECU case? Describe the real fault.
+- Why both a range check and a rate check? Give a value each one catches that the other misses.
+- Why is the rate limit multiplied by `last_delta` (the number of frames since the last good one)?
+- After a rate rejection the core re-anchors. Why does a real jump (150 km/h that stays) get
+  accepted one frame later, while a single spike never shows?
+- Why 3 good frames after a fault (R8) instead of the first good one?
+- Why the 500 ms start-up grace, and why is the ECU DATA lamp off while the first frames sync?
+- CHECK ENGINE only from a valid frame (R9). Why turn it *off* when the ECU is lost, instead of
+  keeping the last state?
+- Nav: why is the heading hidden for UNAVAILABLE but shown for DEGRADED?
+- The nav timeout is 300 ms and the ECU timeout 100 ms. Why different?
+
+**Experiments (predict first, then run):**
+
+- `cluster_sim 0:- 1000:ecu=off 1080:ecu=ok 2000:-`: an 80 ms gap. Does the gauge go to `--`? Then 120 ms.
+- `cluster_sim 0:- 1000:speed=60 1020:speed=70 1040:speed=80 1060:speed=95 2000:-`: which steps pass the rate check?
+- `cluster_sim 0:- 1000:mil=1 1500:ecu=corrupt 2000:ecu=ok 2500:-`: what does CHECK ENGINE do, and when?
+- `cluster_sim 0:- 1000:nav=aligning 1500:nav=degraded 2000:nav=nominal 2500:-`: lamp and heading each time?
+- Set `ECU_RECOVER_FRAMES` to 1. Which test fails? Run the demo: what changes after each fault? Undo.
+- Remove the `if (s == E2E_INITIAL) ...` line in `on_engine`. Which tests fail, and why? Undo.
+
+**Done-checklist**
+
+- [ ] `unit_tests` says 49/49 in WSL
+- [ ] I can point to every line of "what happened" in the demo and name the rule
+- [ ] I wrote one fault script of my own and predicted the result before running it
+- [ ] I answered the questions above without notes
+- [ ] CI is green (all 8 jobs, including Windows)
+- [ ] Committed and tagged `m10-cluster-supervision`
